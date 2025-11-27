@@ -1,0 +1,443 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		/* RemoteKbMouseHost build files */
+		HOST001 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOSTF001 /* main.swift */; };
+		HOST002 /* HostConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOSTF002 /* HostConfig.swift */; };
+		HOST003 /* HostControlStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOSTF003 /* HostControlStateMachine.swift */; };
+		HOST004 /* HostNetworkSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOSTF004 /* HostNetworkSender.swift */; };
+		HOST005 /* HostInputCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOSTF005 /* HostInputCaptureManager.swift */; };
+		HOST006 /* EventMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = SHAREDF001 /* EventMessage.swift */; };
+
+		/* RemoteKbMouseClient build files */
+		CLIENT001 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLIENTF001 /* main.swift */; };
+		CLIENT002 /* ClientConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLIENTF002 /* ClientConfig.swift */; };
+		CLIENT003 /* ClientEventInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLIENTF003 /* ClientEventInjector.swift */; };
+		CLIENT004 /* ClientNetworkListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLIENTF004 /* ClientNetworkListener.swift */; };
+		CLIENT005 /* EventMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = SHAREDF001 /* EventMessage.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		HOSTCOPY001 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		CLIENTCOPY001 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		/* Products */
+		HOSTPROD001 /* RemoteKbMouseHost */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = RemoteKbMouseHost; sourceTree = BUILT_PRODUCTS_DIR; };
+		CLIENTPROD001 /* RemoteKbMouseClient */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = RemoteKbMouseClient; sourceTree = BUILT_PRODUCTS_DIR; };
+
+		/* Host source files */
+		HOSTF001 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		HOSTF002 /* HostConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostConfig.swift; sourceTree = "<group>"; };
+		HOSTF003 /* HostControlStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostControlStateMachine.swift; sourceTree = "<group>"; };
+		HOSTF004 /* HostNetworkSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostNetworkSender.swift; sourceTree = "<group>"; };
+		HOSTF005 /* HostInputCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostInputCaptureManager.swift; sourceTree = "<group>"; };
+
+		/* Client source files */
+		CLIENTF001 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		CLIENTF002 /* ClientConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientConfig.swift; sourceTree = "<group>"; };
+		CLIENTF003 /* ClientEventInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientEventInjector.swift; sourceTree = "<group>"; };
+		CLIENTF004 /* ClientNetworkListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientNetworkListener.swift; sourceTree = "<group>"; };
+
+		/* Shared source files */
+		SHAREDF001 /* EventMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventMessage.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		HOSTFW001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CLIENTFW001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		ROOT001 = {
+			isa = PBXGroup;
+			children = (
+				HOSTGRP001 /* RemoteKbMouseHost */,
+				CLIENTGRP001 /* RemoteKbMouseClient */,
+				SHAREDGRP001 /* Shared */,
+				PRODGRP001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		PRODGRP001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				HOSTPROD001 /* RemoteKbMouseHost */,
+				CLIENTPROD001 /* RemoteKbMouseClient */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		HOSTGRP001 /* RemoteKbMouseHost */ = {
+			isa = PBXGroup;
+			children = (
+				HOSTF001 /* main.swift */,
+				HOSTF002 /* HostConfig.swift */,
+				HOSTF003 /* HostControlStateMachine.swift */,
+				HOSTF004 /* HostNetworkSender.swift */,
+				HOSTF005 /* HostInputCaptureManager.swift */,
+			);
+			path = RemoteKbMouseHost;
+			sourceTree = "<group>";
+		};
+		CLIENTGRP001 /* RemoteKbMouseClient */ = {
+			isa = PBXGroup;
+			children = (
+				CLIENTF001 /* main.swift */,
+				CLIENTF002 /* ClientConfig.swift */,
+				CLIENTF003 /* ClientEventInjector.swift */,
+				CLIENTF004 /* ClientNetworkListener.swift */,
+			);
+			path = RemoteKbMouseClient;
+			sourceTree = "<group>";
+		};
+		SHAREDGRP001 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				SHAREDF001 /* EventMessage.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		HOSTTGT001 /* RemoteKbMouseHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = HOSTCFGLIST001 /* Build configuration list for PBXNativeTarget "RemoteKbMouseHost" */;
+			buildPhases = (
+				HOSTSRC001 /* Sources */,
+				HOSTFW001 /* Frameworks */,
+				HOSTCOPY001 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RemoteKbMouseHost;
+			productName = RemoteKbMouseHost;
+			productReference = HOSTPROD001 /* RemoteKbMouseHost */;
+			productType = "com.apple.product-type.tool";
+		};
+		CLIENTTGT001 /* RemoteKbMouseClient */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CLIENTCFGLIST001 /* Build configuration list for PBXNativeTarget "RemoteKbMouseClient" */;
+			buildPhases = (
+				CLIENTSRC001 /* Sources */,
+				CLIENTFW001 /* Frameworks */,
+				CLIENTCOPY001 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RemoteKbMouseClient;
+			productName = RemoteKbMouseClient;
+			productReference = CLIENTPROD001 /* RemoteKbMouseClient */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		PROJ001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					HOSTTGT001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					CLIENTTGT001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = PROJCFGLIST001 /* Build configuration list for PBXProject "RemoteKbMouse" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = ROOT001;
+			productRefGroup = PRODGRP001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				HOSTTGT001 /* RemoteKbMouseHost */,
+				CLIENTTGT001 /* RemoteKbMouseClient */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		HOSTSRC001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				HOST001 /* main.swift in Sources */,
+				HOST002 /* HostConfig.swift in Sources */,
+				HOST003 /* HostControlStateMachine.swift in Sources */,
+				HOST004 /* HostNetworkSender.swift in Sources */,
+				HOST005 /* HostInputCaptureManager.swift in Sources */,
+				HOST006 /* EventMessage.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CLIENTSRC001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CLIENT001 /* main.swift in Sources */,
+				CLIENT002 /* ClientConfig.swift in Sources */,
+				CLIENT003 /* ClientEventInjector.swift in Sources */,
+				CLIENT004 /* ClientNetworkListener.swift in Sources */,
+				CLIENT005 /* EventMessage.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		/* Project Debug */
+		PROJCFG001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		/* Project Release */
+		PROJCFG002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		/* Host Debug */
+		HOSTCFG001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		/* Host Release */
+		HOSTCFG002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		/* Client Debug */
+		CLIENTCFG001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		/* Client Release */
+		CLIENTCFG002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		PROJCFGLIST001 /* Build configuration list for PBXProject "RemoteKbMouse" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				PROJCFG001 /* Debug */,
+				PROJCFG002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		HOSTCFGLIST001 /* Build configuration list for PBXNativeTarget "RemoteKbMouseHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				HOSTCFG001 /* Debug */,
+				HOSTCFG002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CLIENTCFGLIST001 /* Build configuration list for PBXNativeTarget "RemoteKbMouseClient" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CLIENTCFG001 /* Debug */,
+				CLIENTCFG002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = PROJ001 /* Project object */;
+}
