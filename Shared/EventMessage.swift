@@ -10,7 +10,7 @@ import Foundation
 // MARK: - Event Kind
 
 /// The type of input event being transmitted.
-enum EventKind: String, Codable {
+public enum EventKind: String, Codable {
     case keyboard
     case mouseMove
     case mouseButton
@@ -20,64 +20,98 @@ enum EventKind: String, Codable {
 // MARK: - Payloads
 
 /// Payload for keyboard events.
-struct KeyboardPayload: Codable {
+public struct KeyboardPayload: Codable {
     /// The virtual key code (e.g., kVK_ANSI_A = 0x00).
-    let keyCode: UInt16
+    public let keyCode: UInt16
     /// True if key is pressed down, false if released.
-    let isKeyDown: Bool
+    public let isKeyDown: Bool
     /// CGEventFlags.rawValue for modifiers (Shift, Control, Option, Command, etc.).
-    let flags: UInt64
+    public let flags: UInt64
+    
+    public init(keyCode: UInt16, isKeyDown: Bool, flags: UInt64) {
+        self.keyCode = keyCode
+        self.isKeyDown = isKeyDown
+        self.flags = flags
+    }
 }
 
 /// Payload for mouse movement events.
-struct MouseMovePayload: Codable {
+public struct MouseMovePayload: Codable {
     /// Relative movement in X direction.
-    let deltaX: Int64
+    public let deltaX: Int64
     /// Relative movement in Y direction.
-    let deltaY: Int64
+    public let deltaY: Int64
     /// Absolute X position (used for positioning cursor on client).
-    let absoluteX: Double?
+    public let absoluteX: Double?
     /// Absolute Y position (used for positioning cursor on client).
-    let absoluteY: Double?
+    public let absoluteY: Double?
+    
+    public init(deltaX: Int64, deltaY: Int64, absoluteX: Double?, absoluteY: Double?) {
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.absoluteX = absoluteX
+        self.absoluteY = absoluteY
+    }
 }
 
 /// Payload for mouse button events.
-struct MouseButtonPayload: Codable {
+public struct MouseButtonPayload: Codable {
     /// Button number: 0=left, 1=right, 2=center/other.
-    let button: Int
+    public let button: Int
     /// True if button pressed down, false if released.
-    let isDown: Bool
+    public let isDown: Bool
     /// Number of clicks (for double-click, triple-click, etc.).
-    let clickCount: Int
+    public let clickCount: Int
     /// X position where the click occurred.
-    let x: Double
+    public let x: Double
     /// Y position where the click occurred.
-    let y: Double
+    public let y: Double
+    
+    public init(button: Int, isDown: Bool, clickCount: Int, x: Double, y: Double) {
+        self.button = button
+        self.isDown = isDown
+        self.clickCount = clickCount
+        self.x = x
+        self.y = y
+    }
 }
 
 /// Payload for scroll wheel events.
-struct ScrollPayload: Codable {
+public struct ScrollPayload: Codable {
     /// Scroll delta in X direction (horizontal scroll).
-    let deltaX: Int32
+    public let deltaX: Int32
     /// Scroll delta in Y direction (vertical scroll).
-    let deltaY: Int32
+    public let deltaY: Int32
+    
+    public init(deltaX: Int32, deltaY: Int32) {
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+    }
 }
 
 // MARK: - Event Message
 
 /// The main message structure sent over the network.
 /// Exactly one payload will be non-nil based on the `kind`.
-struct EventMessage: Codable {
-    let kind: EventKind
-    let keyboard: KeyboardPayload?
-    let mouseMove: MouseMovePayload?
-    let mouseButton: MouseButtonPayload?
-    let scroll: ScrollPayload?
+public struct EventMessage: Codable {
+    public let kind: EventKind
+    public let keyboard: KeyboardPayload?
+    public let mouseMove: MouseMovePayload?
+    public let mouseButton: MouseButtonPayload?
+    public let scroll: ScrollPayload?
+    
+    public init(kind: EventKind, keyboard: KeyboardPayload?, mouseMove: MouseMovePayload?, mouseButton: MouseButtonPayload?, scroll: ScrollPayload?) {
+        self.kind = kind
+        self.keyboard = keyboard
+        self.mouseMove = mouseMove
+        self.mouseButton = mouseButton
+        self.scroll = scroll
+    }
     
     // MARK: - Convenience Initializers
     
     /// Create a keyboard event message.
-    static func keyboard(keyCode: UInt16, isKeyDown: Bool, flags: UInt64) -> EventMessage {
+    public static func keyboard(keyCode: UInt16, isKeyDown: Bool, flags: UInt64) -> EventMessage {
         return EventMessage(
             kind: .keyboard,
             keyboard: KeyboardPayload(keyCode: keyCode, isKeyDown: isKeyDown, flags: flags),
@@ -88,7 +122,7 @@ struct EventMessage: Codable {
     }
     
     /// Create a mouse move event message.
-    static func mouseMove(deltaX: Int64, deltaY: Int64, absoluteX: Double? = nil, absoluteY: Double? = nil) -> EventMessage {
+    public static func mouseMove(deltaX: Int64, deltaY: Int64, absoluteX: Double? = nil, absoluteY: Double? = nil) -> EventMessage {
         return EventMessage(
             kind: .mouseMove,
             keyboard: nil,
@@ -99,7 +133,7 @@ struct EventMessage: Codable {
     }
     
     /// Create a mouse button event message.
-    static func mouseButton(button: Int, isDown: Bool, clickCount: Int, x: Double, y: Double) -> EventMessage {
+    public static func mouseButton(button: Int, isDown: Bool, clickCount: Int, x: Double, y: Double) -> EventMessage {
         return EventMessage(
             kind: .mouseButton,
             keyboard: nil,
@@ -110,7 +144,7 @@ struct EventMessage: Codable {
     }
     
     /// Create a scroll event message.
-    static func scroll(deltaX: Int32, deltaY: Int32) -> EventMessage {
+    public static func scroll(deltaX: Int32, deltaY: Int32) -> EventMessage {
         return EventMessage(
             kind: .scroll,
             keyboard: nil,
@@ -125,10 +159,10 @@ struct EventMessage: Codable {
 
 /// Helper for length-prefixed message framing.
 /// Format: [4-byte big-endian length][JSON data]
-struct MessageFraming {
+public struct MessageFraming {
     
     /// Encode a message with length prefix for network transmission.
-    static func encode(_ message: EventMessage) throws -> Data {
+    public static func encode(_ message: EventMessage) throws -> Data {
         let encoder = JSONEncoder()
         let jsonData = try encoder.encode(message)
         
@@ -142,7 +176,7 @@ struct MessageFraming {
     }
     
     /// Extract the length from a 4-byte header.
-    static func extractLength(from data: Data) -> UInt32? {
+    public static func extractLength(from data: Data) -> UInt32? {
         guard data.count >= 4 else { return nil }
         return data.withUnsafeBytes { ptr in
             UInt32(bigEndian: ptr.load(as: UInt32.self))
@@ -150,7 +184,7 @@ struct MessageFraming {
     }
     
     /// Decode a message from JSON data.
-    static func decode(_ data: Data) throws -> EventMessage {
+    public static func decode(_ data: Data) throws -> EventMessage {
         let decoder = JSONDecoder()
         return try decoder.decode(EventMessage.self, from: data)
     }

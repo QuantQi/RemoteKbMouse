@@ -7,6 +7,7 @@
 
 import Foundation
 import Network
+import Shared
 
 /// Handles the TCP connection to the client and sends event messages.
 final class HostNetworkSender {

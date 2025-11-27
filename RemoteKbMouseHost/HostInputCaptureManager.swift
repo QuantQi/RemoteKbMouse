@@ -8,6 +8,7 @@
 import Foundation
 import CoreGraphics
 import Quartz
+import Shared
 
 /// Manages the CGEvent tap for capturing keyboard and mouse input.
 final class HostInputCaptureManager {
