@@ -7,6 +7,7 @@
 
 import Foundation
 import CoreGraphics
+import Shared
 
 /// Injects received events into the local macOS session.
 final class ClientEventInjector {

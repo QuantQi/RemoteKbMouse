@@ -7,6 +7,7 @@
 
 import Foundation
 import Network
+import Shared
 
 /// Listens for incoming connections from the Host and receives event messages.
 final class ClientNetworkListener {
