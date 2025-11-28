@@ -164,53 +164,53 @@ class InputReceiver {
     // MARK: - Event Simulation
     
     private func moveMouse(to point: CGPoint) {
-        let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else { return }
+        event.post(tap: .cgSessionEventTap)
     }
     
     private func mouseDown(at point: CGPoint, button: Int) {
         let mouseType: CGEventType = button == 0 ? .leftMouseDown : .rightMouseDown
         let mouseButton: CGMouseButton = button == 0 ? .left : .right
-        let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else { return }
+        event.post(tap: .cgSessionEventTap)
     }
     
     private func mouseUp(at point: CGPoint, button: Int) {
         let mouseType: CGEventType = button == 0 ? .leftMouseUp : .rightMouseUp
         let mouseButton: CGMouseButton = button == 0 ? .left : .right
-        let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else { return }
+        event.post(tap: .cgSessionEventTap)
     }
     
     private func mouseDrag(to point: CGPoint, button: Int) {
         let mouseType: CGEventType = button == 0 ? .leftMouseDragged : .rightMouseDragged
         let mouseButton: CGMouseButton = button == 0 ? .left : .right
-        let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else { return }
+        event.post(tap: .cgSessionEventTap)
     }
     
     private func scroll(deltaX: Double, deltaY: Double) {
-        let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: Int32(deltaY), wheel2: Int32(deltaX), wheel3: 0)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: Int32(deltaY), wheel2: Int32(deltaX), wheel3: 0) else { return }
+        event.post(tap: .cgSessionEventTap)
     }
     
     private func keyDown(keyCode: UInt16, flags: UInt64) {
-        let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true)
-        event?.flags = CGEventFlags(rawValue: flags)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else { return }
+        event.flags = CGEventFlags(rawValue: flags)
+        event.post(tap: .cgSessionEventTap)
     }
     
     private func keyUp(keyCode: UInt16, flags: UInt64) {
-        let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
-        event?.flags = CGEventFlags(rawValue: flags)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else { return }
+        event.flags = CGEventFlags(rawValue: flags)
+        event.post(tap: .cgSessionEventTap)
     }
     
     private func flagsChanged(flags: UInt64) {
-        let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-        event?.type = .flagsChanged
-        event?.flags = CGEventFlags(rawValue: flags)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return }
+        event.type = .flagsChanged
+        event.flags = CGEventFlags(rawValue: flags)
+        event.post(tap: .cgSessionEventTap)
     }
 }
 
