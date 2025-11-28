@@ -39,9 +39,17 @@ class EventPoster {
     
     func postMouseMove(x: Double, y: Double) {
         CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self = self else { return }
+            
             let point = CGPoint(x: x, y: y)
+            
+            // Try CGEvent first for proper event generation
+            if let event = CGEvent(mouseEventSource: self.eventSource, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) {
+                event.post(tap: .cghidEventTap)
+            }
+            
+            // Also use CGWarpMouseCursorPosition as backup
             CGWarpMouseCursorPosition(point)
-            CGAssociateMouseAndMouseCursorPosition(1)
         }
         CFRunLoopWakeUp(runLoop)
     }
@@ -290,8 +298,9 @@ class InputReceiver {
         switch event.type {
         case .mouseMove:
             if let x = event.x, let y = event.y {
+                sendStatus("mouseMove to (\(Int(x)), \(Int(y)))")
                 eventPoster.postMouseMove(x: x, y: y)
-                sendStatus("✓ mouseMove")
+                sendStatus("✓ mouseMove posted")
             }
             
         case .mouseDown:
@@ -347,6 +356,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("=== Remote Keyboard/Mouse Client ===")
         print("Using dedicated event poster thread")
         print("")
+        
+        // Ensure cursor is visible
+        CGDisplayShowCursor(CGMainDisplayID())
+        CGAssociateMouseAndMouseCursorPosition(1)
         
         // Start event poster thread first
         eventPoster.start()
