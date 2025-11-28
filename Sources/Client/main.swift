@@ -2,6 +2,132 @@ import Cocoa
 import Network
 import ApplicationServices
 
+// MARK: - Use separate thread for event posting with CGEvent
+// The trace trap appears to be related to CGEvent usage from certain contexts
+// We'll use a dedicated background thread with its own run loop for all event posting
+
+class EventPoster {
+    private var thread: Thread?
+    private var runLoop: CFRunLoop?
+    private let eventQueue = DispatchQueue(label: "event.poster", qos: .userInteractive)
+    private var eventSource: CGEventSource?
+    private var isReady = false
+    
+    func start() {
+        thread = Thread { [weak self] in
+            self?.threadMain()
+        }
+        thread?.name = "EventPosterThread"
+        thread?.qualityOfService = .userInteractive
+        thread?.start()
+        
+        // Wait for thread to be ready
+        while !isReady {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+    }
+    
+    private func threadMain() {
+        // Create event source on this thread
+        eventSource = CGEventSource(stateID: .combinedSessionState)
+        runLoop = CFRunLoopGetCurrent()
+        isReady = true
+        
+        // Run the loop forever
+        CFRunLoopRun()
+    }
+    
+    func postMouseMove(x: Double, y: Double) {
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            let point = CGPoint(x: x, y: y)
+            CGWarpMouseCursorPosition(point)
+            CGAssociateMouseAndMouseCursorPosition(1)
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+    
+    func postMouseButton(x: Double, y: Double, button: Int, isDown: Bool) {
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self = self else { return }
+            
+            let point = CGPoint(x: x, y: y)
+            CGWarpMouseCursorPosition(point)
+            
+            let mouseType: CGEventType
+            let mouseButton: CGMouseButton
+            
+            if button == 0 {
+                mouseType = isDown ? .leftMouseDown : .leftMouseUp
+                mouseButton = .left
+            } else {
+                mouseType = isDown ? .rightMouseDown : .rightMouseUp
+                mouseButton = .right
+            }
+            
+            if let event = CGEvent(mouseEventSource: self.eventSource, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) {
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+    
+    func postMouseDrag(x: Double, y: Double, button: Int) {
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self = self else { return }
+            
+            let point = CGPoint(x: x, y: y)
+            CGWarpMouseCursorPosition(point)
+            
+            let mouseType: CGEventType = button == 0 ? .leftMouseDragged : .rightMouseDragged
+            let mouseButton: CGMouseButton = button == 0 ? .left : .right
+            
+            if let event = CGEvent(mouseEventSource: self.eventSource, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) {
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+    
+    func postScroll(deltaX: Double, deltaY: Double) {
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self = self else { return }
+            
+            if let event = CGEvent(scrollWheelEvent2Source: self.eventSource, units: .pixel, wheelCount: 2, wheel1: Int32(deltaY * 3), wheel2: Int32(deltaX * 3), wheel3: 0) {
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+    
+    func postKey(keyCode: UInt16, flags: UInt64, isDown: Bool) {
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self = self else { return }
+            
+            if let event = CGEvent(keyboardEventSource: self.eventSource, virtualKey: keyCode, keyDown: isDown) {
+                event.flags = CGEventFlags(rawValue: flags)
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+    
+    func postFlagsChanged(flags: UInt64) {
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self = self else { return }
+            
+            if let event = CGEvent(keyboardEventSource: self.eventSource, virtualKey: 0, keyDown: false) {
+                event.type = .flagsChanged
+                event.flags = CGEventFlags(rawValue: flags)
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+}
+
+// Global event poster
+let eventPoster = EventPoster()
+
 // Check accessibility permissions
 func checkAccessibility() -> Bool {
     let trusted = AXIsProcessTrusted()
@@ -9,10 +135,7 @@ func checkAccessibility() -> Bool {
         print("⚠️  Accessibility permission required!")
         print("   Go to: System Settings → Privacy & Security → Accessibility")
         print("   Add this app to the list and enable it.")
-        print("")
-        print("   Attempting to prompt for permission...")
         
-        // This will prompt the user to grant permission
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
     }
@@ -44,43 +167,28 @@ struct InputEvent: Codable {
 
 let INPUT_PORT: UInt16 = 9876
 
-// Global event source - create once and reuse
-var globalEventSource: CGEventSource?
-
-func getEventSource() -> CGEventSource? {
-    if globalEventSource == nil {
-        globalEventSource = CGEventSource(stateID: .hidSystemState)
-    }
-    return globalEventSource
-}
-
 class InputReceiver {
     private var listener: NWListener?
     private var connection: NWConnection?
     private var buffer = Data()
     
     func start() {
-        // Kill any existing listener
         listener?.cancel()
         listener = nil
         
         do {
             listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: INPUT_PORT)!)
             listener?.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
+                if case .ready = state {
                     print("[Input] Server listening on port \(INPUT_PORT)")
-                case .failed(let error):
+                } else if case .failed(let error) = state {
                     print("[Input] Server failed: \(error)")
-                default:
-                    break
                 }
             }
             listener?.newConnectionHandler = { [weak self] conn in
                 print("[Input] Host connected!")
-                // Kill old connection, accept new one
                 self?.connection?.cancel()
-                self?.buffer = Data()  // Clear buffer on new connection
+                self?.buffer = Data()
                 self?.connection = conn
                 conn.start(queue: .main)
                 self?.receiveData()
@@ -108,7 +216,7 @@ class InputReceiver {
             }
             
             if isComplete {
-                print("[Input] Connection closed by host")
+                print("[Input] Connection closed")
                 return
             }
             
@@ -127,116 +235,52 @@ class InputReceiver {
             buffer.removeFirst(totalLength)
             
             if let event = try? JSONDecoder().decode(InputEvent.self, from: jsonData) {
-                // Handle immediately on main thread
                 handleEvent(event)
             }
         }
     }
     
     private func handleEvent(_ event: InputEvent) {
-        autoreleasepool {
-            switch event.type {
-            case .mouseMove:
-                if let x = event.x, let y = event.y {
-                    moveMouse(to: CGPoint(x: x, y: y))
-                }
-                
-            case .mouseDown:
-                if let x = event.x, let y = event.y, let button = event.button {
-                    mouseClick(at: CGPoint(x: x, y: y), button: button, isDown: true)
-                }
-                
-            case .mouseUp:
-                if let x = event.x, let y = event.y, let button = event.button {
-                    mouseClick(at: CGPoint(x: x, y: y), button: button, isDown: false)
-                }
-                
-            case .mouseDrag:
-                if let x = event.x, let y = event.y, let button = event.button {
-                    mouseDrag(to: CGPoint(x: x, y: y), button: button)
-                }
-                
-            case .scroll:
-                if let deltaX = event.deltaX, let deltaY = event.deltaY {
-                    scroll(deltaX: deltaX, deltaY: deltaY)
-                }
-                
-            case .keyDown:
-                if let keyCode = event.keyCode {
-                    keyEvent(keyCode: keyCode, flags: event.flags ?? 0, isDown: true)
-                }
-                
-            case .keyUp:
-                if let keyCode = event.keyCode {
-                    keyEvent(keyCode: keyCode, flags: event.flags ?? 0, isDown: false)
-                }
-                
-            case .flagsChanged:
-                if let flags = event.flags {
-                    flagsChanged(flags: flags)
-                }
+        switch event.type {
+        case .mouseMove:
+            if let x = event.x, let y = event.y {
+                eventPoster.postMouseMove(x: x, y: y)
             }
-        }
-    }
-    
-    // MARK: - Event Simulation using CGWarp and CGEvent with shared source
-    
-    private func moveMouse(to point: CGPoint) {
-        // Use CGWarpMouseCursorPosition - most reliable
-        CGWarpMouseCursorPosition(point)
-        // Optionally associate with display
-        CGAssociateMouseAndMouseCursorPosition(1)
-    }
-    
-    private func mouseClick(at point: CGPoint, button: Int, isDown: Bool) {
-        // First warp cursor to position
-        CGWarpMouseCursorPosition(point)
-        
-        let mouseType: CGEventType
-        let mouseButton: CGMouseButton
-        
-        if button == 0 {
-            mouseType = isDown ? .leftMouseDown : .leftMouseUp
-            mouseButton = .left
-        } else {
-            mouseType = isDown ? .rightMouseDown : .rightMouseUp
-            mouseButton = .right
-        }
-        
-        if let event = CGEvent(mouseEventSource: getEventSource(), mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) {
-            event.post(tap: .cghidEventTap)
-        }
-    }
-    
-    private func mouseDrag(to point: CGPoint, button: Int) {
-        CGWarpMouseCursorPosition(point)
-        
-        let mouseType: CGEventType = button == 0 ? .leftMouseDragged : .rightMouseDragged
-        let mouseButton: CGMouseButton = button == 0 ? .left : .right
-        
-        if let event = CGEvent(mouseEventSource: getEventSource(), mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) {
-            event.post(tap: .cghidEventTap)
-        }
-    }
-    
-    private func scroll(deltaX: Double, deltaY: Double) {
-        if let event = CGEvent(scrollWheelEvent2Source: getEventSource(), units: .pixel, wheelCount: 2, wheel1: Int32(deltaY * 10), wheel2: Int32(deltaX * 10), wheel3: 0) {
-            event.post(tap: .cghidEventTap)
-        }
-    }
-    
-    private func keyEvent(keyCode: UInt16, flags: UInt64, isDown: Bool) {
-        if let event = CGEvent(keyboardEventSource: getEventSource(), virtualKey: keyCode, keyDown: isDown) {
-            event.flags = CGEventFlags(rawValue: flags)
-            event.post(tap: .cghidEventTap)
-        }
-    }
-    
-    private func flagsChanged(flags: UInt64) {
-        if let event = CGEvent(keyboardEventSource: getEventSource(), virtualKey: 0, keyDown: false) {
-            event.type = .flagsChanged
-            event.flags = CGEventFlags(rawValue: flags)
-            event.post(tap: .cghidEventTap)
+            
+        case .mouseDown:
+            if let x = event.x, let y = event.y, let button = event.button {
+                eventPoster.postMouseButton(x: x, y: y, button: button, isDown: true)
+            }
+            
+        case .mouseUp:
+            if let x = event.x, let y = event.y, let button = event.button {
+                eventPoster.postMouseButton(x: x, y: y, button: button, isDown: false)
+            }
+            
+        case .mouseDrag:
+            if let x = event.x, let y = event.y, let button = event.button {
+                eventPoster.postMouseDrag(x: x, y: y, button: button)
+            }
+            
+        case .scroll:
+            if let deltaX = event.deltaX, let deltaY = event.deltaY {
+                eventPoster.postScroll(deltaX: deltaX, deltaY: deltaY)
+            }
+            
+        case .keyDown:
+            if let keyCode = event.keyCode {
+                eventPoster.postKey(keyCode: keyCode, flags: event.flags ?? 0, isDown: true)
+            }
+            
+        case .keyUp:
+            if let keyCode = event.keyCode {
+                eventPoster.postKey(keyCode: keyCode, flags: event.flags ?? 0, isDown: false)
+            }
+            
+        case .flagsChanged:
+            if let flags = event.flags {
+                eventPoster.postFlagsChanged(flags: flags)
+            }
         }
     }
 }
@@ -247,20 +291,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("=== Remote Keyboard/Mouse Client ===")
-        print("Listening for input events on port \(INPUT_PORT)")
+        print("Using dedicated event poster thread")
         print("")
         
-        // Initialize event source early
-        _ = getEventSource()
-        print("✅ CGEventSource initialized")
+        // Start event poster thread first
+        eventPoster.start()
+        print("✅ Event poster thread started")
         
         // Check accessibility
-        let hasAccess = checkAccessibility()
-        if hasAccess {
+        if checkAccessibility() {
             print("✅ Accessibility permission granted")
         } else {
-            print("⏳ Waiting for accessibility permission...")
-            print("   Grant permission, then restart this app.")
+            print("⏳ Grant accessibility permission and restart")
         }
         print("")
         
