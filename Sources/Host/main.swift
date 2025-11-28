@@ -80,6 +80,37 @@ class VideoPreviewView: NSView {
     }
 }
 
+// Status overlay label
+class StatusOverlay: NSTextField {
+    init() {
+        super.init(frame: .zero)
+        isEditable = false
+        isBordered = false
+        isSelectable = false
+        backgroundColor = NSColor.black.withAlphaComponent(0.7)
+        textColor = .white
+        font = NSFont.boldSystemFont(ofSize: 24)
+        alignment = .center
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        stringValue = "🟢 HOST"
+    }
+    
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+    
+    func setControlMode(isClient: Bool) {
+        if isClient {
+            stringValue = "🔴 CLIENT"
+            backgroundColor = NSColor.red.withAlphaComponent(0.7)
+        } else {
+            stringValue = "🟢 HOST"
+            backgroundColor = NSColor.black.withAlphaComponent(0.7)
+        }
+    }
+}
+
 class VideoWindow: NSWindow {
     init() {
         // Get main screen size for fullscreen
@@ -107,6 +138,7 @@ class VideoCapture: NSObject {
     private var captureSession: AVCaptureSession?
     var window: VideoWindow?
     private var previewView: VideoPreviewView?
+    private var statusOverlay: StatusOverlay?
     
     override init() {
         super.init()
@@ -122,11 +154,23 @@ class VideoCapture: NSObject {
         return window?.isKeyWindow ?? false
     }
     
+    func setControlMode(isClient: Bool) {
+        DispatchQueue.main.async {
+            self.statusOverlay?.setControlMode(isClient: isClient)
+        }
+    }
+    
     private func setupWindow() {
         window = VideoWindow()
         previewView = VideoPreviewView(frame: window!.contentView!.bounds)
         previewView?.autoresizingMask = [.width, .height]
         window?.contentView?.addSubview(previewView!)
+        
+        // Add status overlay
+        statusOverlay = StatusOverlay()
+        statusOverlay?.frame = NSRect(x: 20, y: 20, width: 200, height: 50)
+        window?.contentView?.addSubview(statusOverlay!)
+        
         window?.makeKeyAndOrderFront(nil)
         window?.toggleFullScreen(nil)
     }
@@ -418,6 +462,7 @@ class InputController {
         CGEvent.tapEnable(tap: eventTap, enable: true)
         
         isCapturing = true
+        videoCapture?.setControlMode(isClient: true)
         print("🔴 [Input] Capturing - events sent to client")
     }
     
@@ -435,6 +480,7 @@ class InputController {
         connection?.cancel()
         connection = nil
         isCapturing = false
+        videoCapture?.setControlMode(isClient: false)
         print("🟢 [Input] Local mode - events stay on host")
     }
     

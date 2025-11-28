@@ -48,6 +48,7 @@ class InputReceiver {
     private var listener: NWListener?
     private var connection: NWConnection?
     private var buffer = Data()
+    private let eventQueue = DispatchQueue(label: "com.remotekbmouse.events", qos: .userInteractive)
     
     func start() {
         // Kill any existing listener
@@ -81,10 +82,18 @@ class InputReceiver {
     }
     
     private func receiveData() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            if let data = data, !data.isEmpty {
-                self?.buffer.append(data)
-                self?.processBuffer()
+        guard let conn = connection else {
+            print("[DEBUG] receiveData: No connection!")
+            return
+        }
+        
+        print("[DEBUG] receiveData: Waiting for data...")
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            print("[DEBUG] receiveData: Callback fired")
+            
+            guard let self = self else {
+                print("[DEBUG] receiveData: self is nil!")
+                return
             }
             
             if let error = error {
@@ -92,12 +101,23 @@ class InputReceiver {
                 return
             }
             
+            if let data = data, !data.isEmpty {
+                print("[DEBUG] receiveData: Got \(data.count) bytes")
+                self.buffer.append(data)
+                self.processBuffer()
+            }
+            
             if isComplete {
                 print("[Input] Connection closed by host")
                 return
             }
             
-            self?.receiveData()
+            print("[DEBUG] receiveData: Scheduling next receive...")
+            // Use DispatchQueue to avoid potential stack issues
+            DispatchQueue.main.async {
+                print("[DEBUG] receiveData: Calling receiveData again")
+                self.receiveData()
+            }
         }
     }
     
@@ -113,8 +133,11 @@ class InputReceiver {
             
             if let event = try? JSONDecoder().decode(InputEvent.self, from: jsonData) {
                 print("[DEBUG] Received event: \(event.type)")
-                handleEvent(event)
-                print("[DEBUG] Event handled successfully")
+                // Handle event on dedicated queue to avoid blocking network
+                eventQueue.async { [weak self] in
+                    self?.handleEvent(event)
+                    print("[DEBUG] Event handled successfully")
+                }
             }
         }
     }
