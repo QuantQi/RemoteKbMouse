@@ -48,7 +48,8 @@ class InputReceiver {
     private var listener: NWListener?
     private var connection: NWConnection?
     private var buffer = Data()
-    private let eventQueue = DispatchQueue(label: "com.remotekbmouse.events", qos: .userInteractive)
+    private var isProcessing = false
+    private var eventQueue: [InputEvent] = []
     
     func start() {
         // Kill any existing listener
@@ -133,11 +134,29 @@ class InputReceiver {
             
             if let event = try? JSONDecoder().decode(InputEvent.self, from: jsonData) {
                 print("[DEBUG] Received event: \(event.type)")
-                // Handle event on dedicated queue to avoid blocking network
-                eventQueue.async { [weak self] in
-                    self?.handleEvent(event)
-                    print("[DEBUG] Event handled successfully")
-                }
+                // Queue event and process serially
+                self.eventQueue.append(event)
+                self.processNextEvent()
+            }
+        }
+    }
+    
+    private func processNextEvent() {
+        guard !isProcessing, !eventQueue.isEmpty else { return }
+        
+        isProcessing = true
+        let event = eventQueue.removeFirst()
+        
+        print("[DEBUG] Processing event: \(event.type)")
+        handleEvent(event)
+        print("[DEBUG] Event processed: \(event.type)")
+        
+        isProcessing = false
+        
+        // Process next event if any
+        if !eventQueue.isEmpty {
+            DispatchQueue.main.async { [weak self] in
+                self?.processNextEvent()
             }
         }
     }
@@ -297,23 +316,34 @@ class InputReceiver {
     }
 }
 
-// Main
-print("=== Remote Keyboard/Mouse Client ===")
-print("Listening for input events on port \(INPUT_PORT)")
-print("New connections will kill existing ones")
-print("")
-
-// Check accessibility first
-let hasAccess = checkAccessibility()
-if hasAccess {
-    print("✅ Accessibility permission granted")
-} else {
-    print("⏳ Waiting for accessibility permission...")
-    print("   Grant permission, then restart this app.")
+// App Delegate
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var inputReceiver: InputReceiver?
+    
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        print("=== Remote Keyboard/Mouse Client ===")
+        print("Listening for input events on port \(INPUT_PORT)")
+        print("New connections will kill existing ones")
+        print("")
+        
+        // Check accessibility first
+        let hasAccess = checkAccessibility()
+        if hasAccess {
+            print("✅ Accessibility permission granted")
+        } else {
+            print("⏳ Waiting for accessibility permission...")
+            print("   Grant permission, then restart this app.")
+        }
+        print("")
+        
+        inputReceiver = InputReceiver()
+        inputReceiver?.start()
+    }
 }
-print("")
 
-let inputReceiver = InputReceiver()
-inputReceiver.start()
-
-RunLoop.main.run()
+// Main - Use NSApplication to ensure proper CoreGraphics initialization
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.setActivationPolicy(.accessory)  // No dock icon
+app.run()
