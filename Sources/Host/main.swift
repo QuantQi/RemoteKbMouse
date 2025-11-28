@@ -469,38 +469,48 @@ class InputController {
         
         switch type {
         case .mouseMoved:
+            print("[DEBUG] Host: mouseMoved at (\(location.x), \(location.y))")
             inputEvent = InputEvent(type: .mouseMove, x: location.x, y: location.y)
             
         case .leftMouseDown:
+            print("[DEBUG] Host: leftMouseDown at (\(location.x), \(location.y))")
             inputEvent = InputEvent(type: .mouseDown, x: location.x, y: location.y, button: 0)
             
         case .leftMouseUp:
+            print("[DEBUG] Host: leftMouseUp at (\(location.x), \(location.y))")
             inputEvent = InputEvent(type: .mouseUp, x: location.x, y: location.y, button: 0)
             
         case .rightMouseDown:
+            print("[DEBUG] Host: rightMouseDown at (\(location.x), \(location.y))")
             inputEvent = InputEvent(type: .mouseDown, x: location.x, y: location.y, button: 1)
             
         case .rightMouseUp:
+            print("[DEBUG] Host: rightMouseUp at (\(location.x), \(location.y))")
             inputEvent = InputEvent(type: .mouseUp, x: location.x, y: location.y, button: 1)
             
         case .leftMouseDragged, .rightMouseDragged:
             let button = type == .leftMouseDragged ? 0 : 1
+            print("[DEBUG] Host: mouseDrag at (\(location.x), \(location.y)) button=\(button)")
             inputEvent = InputEvent(type: .mouseDrag, x: location.x, y: location.y, button: button)
             
         case .scrollWheel:
             let deltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
             let deltaX = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+            print("[DEBUG] Host: scroll deltaX=\(deltaX) deltaY=\(deltaY)")
             inputEvent = InputEvent(type: .scroll, deltaX: deltaX, deltaY: deltaY)
             
         case .keyDown:
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+            print("[DEBUG] Host: keyDown keyCode=\(keyCode) flags=\(event.flags.rawValue)")
             inputEvent = InputEvent(type: .keyDown, keyCode: keyCode, flags: event.flags.rawValue)
             
         case .keyUp:
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+            print("[DEBUG] Host: keyUp keyCode=\(keyCode) flags=\(event.flags.rawValue)")
             inputEvent = InputEvent(type: .keyUp, keyCode: keyCode, flags: event.flags.rawValue)
             
         case .flagsChanged:
+            print("[DEBUG] Host: flagsChanged flags=\(event.flags.rawValue)")
             inputEvent = InputEvent(type: .flagsChanged, flags: event.flags.rawValue)
             
         default:
@@ -508,7 +518,9 @@ class InputController {
         }
         
         if let inputEvent = inputEvent {
+            print("[DEBUG] Host: Sending event to client...")
             sendEvent(inputEvent)
+            print("[DEBUG] Host: Event sent")
         }
         
         // Consume the event

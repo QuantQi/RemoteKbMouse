@@ -112,105 +112,165 @@ class InputReceiver {
             buffer.removeFirst(totalLength)
             
             if let event = try? JSONDecoder().decode(InputEvent.self, from: jsonData) {
+                print("[DEBUG] Received event: \(event.type)")
                 handleEvent(event)
+                print("[DEBUG] Event handled successfully")
             }
         }
     }
     
     private func handleEvent(_ event: InputEvent) {
+        print("[DEBUG] handleEvent called for: \(event.type)")
         switch event.type {
         case .mouseMove:
             if let x = event.x, let y = event.y {
+                print("[DEBUG] mouseMove to (\(x), \(y))")
                 moveMouse(to: CGPoint(x: x, y: y))
             }
             
         case .mouseDown:
             if let x = event.x, let y = event.y, let button = event.button {
+                print("[DEBUG] mouseDown at (\(x), \(y)) button=\(button)")
                 mouseDown(at: CGPoint(x: x, y: y), button: button)
             }
             
         case .mouseUp:
             if let x = event.x, let y = event.y, let button = event.button {
+                print("[DEBUG] mouseUp at (\(x), \(y)) button=\(button)")
                 mouseUp(at: CGPoint(x: x, y: y), button: button)
             }
             
         case .mouseDrag:
             if let x = event.x, let y = event.y, let button = event.button {
+                print("[DEBUG] mouseDrag to (\(x), \(y)) button=\(button)")
                 mouseDrag(to: CGPoint(x: x, y: y), button: button)
             }
             
         case .scroll:
             if let deltaX = event.deltaX, let deltaY = event.deltaY {
+                print("[DEBUG] scroll deltaX=\(deltaX) deltaY=\(deltaY)")
                 scroll(deltaX: deltaX, deltaY: deltaY)
             }
             
         case .keyDown:
             if let keyCode = event.keyCode {
+                print("[DEBUG] keyDown keyCode=\(keyCode) flags=\(event.flags ?? 0)")
                 keyDown(keyCode: keyCode, flags: event.flags ?? 0)
             }
             
         case .keyUp:
             if let keyCode = event.keyCode {
+                print("[DEBUG] keyUp keyCode=\(keyCode) flags=\(event.flags ?? 0)")
                 keyUp(keyCode: keyCode, flags: event.flags ?? 0)
             }
             
         case .flagsChanged:
             if let flags = event.flags {
+                print("[DEBUG] flagsChanged flags=\(flags)")
                 flagsChanged(flags: flags)
             }
         }
+        print("[DEBUG] handleEvent completed for: \(event.type)")
     }
     
     // MARK: - Event Simulation
     
     private func moveMouse(to point: CGPoint) {
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else { return }
+        print("[DEBUG] Creating mouseMoved CGEvent...")
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+            print("[DEBUG] Failed to create mouseMoved event!")
+            return
+        }
+        print("[DEBUG] Posting mouseMoved event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] mouseMoved posted successfully")
     }
     
     private func mouseDown(at point: CGPoint, button: Int) {
+        print("[DEBUG] Creating mouseDown CGEvent...")
         let mouseType: CGEventType = button == 0 ? .leftMouseDown : .rightMouseDown
         let mouseButton: CGMouseButton = button == 0 ? .left : .right
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else { return }
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else {
+            print("[DEBUG] Failed to create mouseDown event!")
+            return
+        }
+        print("[DEBUG] Posting mouseDown event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] mouseDown posted successfully")
     }
     
     private func mouseUp(at point: CGPoint, button: Int) {
+        print("[DEBUG] Creating mouseUp CGEvent...")
         let mouseType: CGEventType = button == 0 ? .leftMouseUp : .rightMouseUp
         let mouseButton: CGMouseButton = button == 0 ? .left : .right
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else { return }
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else {
+            print("[DEBUG] Failed to create mouseUp event!")
+            return
+        }
+        print("[DEBUG] Posting mouseUp event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] mouseUp posted successfully")
     }
     
     private func mouseDrag(to point: CGPoint, button: Int) {
+        print("[DEBUG] Creating mouseDrag CGEvent...")
         let mouseType: CGEventType = button == 0 ? .leftMouseDragged : .rightMouseDragged
         let mouseButton: CGMouseButton = button == 0 ? .left : .right
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else { return }
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: mouseType, mouseCursorPosition: point, mouseButton: mouseButton) else {
+            print("[DEBUG] Failed to create mouseDrag event!")
+            return
+        }
+        print("[DEBUG] Posting mouseDrag event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] mouseDrag posted successfully")
     }
     
     private func scroll(deltaX: Double, deltaY: Double) {
-        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: Int32(deltaY), wheel2: Int32(deltaX), wheel3: 0) else { return }
+        print("[DEBUG] Creating scroll CGEvent...")
+        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: Int32(deltaY), wheel2: Int32(deltaX), wheel3: 0) else {
+            print("[DEBUG] Failed to create scroll event!")
+            return
+        }
+        print("[DEBUG] Posting scroll event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] scroll posted successfully")
     }
     
     private func keyDown(keyCode: UInt16, flags: UInt64) {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else { return }
+        print("[DEBUG] Creating keyDown CGEvent for keyCode=\(keyCode)...")
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else {
+            print("[DEBUG] Failed to create keyDown event!")
+            return
+        }
         event.flags = CGEventFlags(rawValue: flags)
+        print("[DEBUG] Posting keyDown event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] keyDown posted successfully")
     }
     
     private func keyUp(keyCode: UInt16, flags: UInt64) {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else { return }
+        print("[DEBUG] Creating keyUp CGEvent for keyCode=\(keyCode)...")
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else {
+            print("[DEBUG] Failed to create keyUp event!")
+            return
+        }
         event.flags = CGEventFlags(rawValue: flags)
+        print("[DEBUG] Posting keyUp event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] keyUp posted successfully")
     }
     
     private func flagsChanged(flags: UInt64) {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return }
+        print("[DEBUG] Creating flagsChanged CGEvent for flags=\(flags)...")
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
+            print("[DEBUG] Failed to create flagsChanged event!")
+            return
+        }
         event.type = .flagsChanged
         event.flags = CGEventFlags(rawValue: flags)
+        print("[DEBUG] Posting flagsChanged event...")
         event.post(tap: .cgSessionEventTap)
+        print("[DEBUG] flagsChanged posted successfully")
     }
 }
 
