@@ -260,6 +260,11 @@ class VideoCapture: NSObject {
 
 // MARK: - Input Controller
 
+// Status message from Client
+struct StatusMessage: Codable {
+    let message: String
+}
+
 class InputController {
     private var connection: NWConnection?
     private var eventTap: CFMachPort?
@@ -269,6 +274,11 @@ class InputController {
     private let clientAddress: String
     weak var videoCapture: VideoCapture?
     weak var appDelegate: AppDelegate?
+    
+    // Status receiver from client
+    private var statusListener: NWListener?
+    private var statusConnection: NWConnection?
+    private var statusBuffer = Data()
     
     // Key code for 'C' key
     private let cKeyCode: UInt16 = 8
@@ -280,6 +290,72 @@ class InputController {
         print("[Input] Auto-switch is DISABLED by default (enable via menu bar)")
         setupHotkeyMonitor()
         setupWindowFocusMonitor()
+        setupStatusReceiver()
+    }
+    
+    private func setupStatusReceiver() {
+        do {
+            statusListener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: 9877)!)
+            statusListener?.stateUpdateHandler = { state in
+                if case .ready = state {
+                    print("[Status] Listening for client status on port 9877")
+                } else if case .failed(let error) = state {
+                    print("[Status] Listener failed: \(error)")
+                }
+            }
+            statusListener?.newConnectionHandler = { [weak self] conn in
+                print("[Status] Client status connected!")
+                self?.statusConnection?.cancel()
+                self?.statusBuffer = Data()
+                self?.statusConnection = conn
+                conn.start(queue: .main)
+                self?.receiveStatus()
+            }
+            statusListener?.start(queue: .main)
+        } catch {
+            print("[Status] Failed to start listener: \(error)")
+        }
+    }
+    
+    private func receiveStatus() {
+        guard let conn = statusConnection else { return }
+        
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                print("[Status] Receive error: \(error)")
+                return
+            }
+            
+            if let data = data, !data.isEmpty {
+                self.statusBuffer.append(data)
+                self.processStatusBuffer()
+            }
+            
+            if isComplete {
+                print("[Status] Connection closed")
+                return
+            }
+            
+            self.receiveStatus()
+        }
+    }
+    
+    private func processStatusBuffer() {
+        while statusBuffer.count >= 4 {
+            let length = statusBuffer.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+            let totalLength = 4 + Int(length)
+            
+            guard statusBuffer.count >= totalLength else { break }
+            
+            let jsonData = statusBuffer.subdata(in: 4..<totalLength)
+            statusBuffer.removeFirst(totalLength)
+            
+            if let status = try? JSONDecoder().decode(StatusMessage.self, from: jsonData) {
+                print("[CLIENT] \(status.message)")
+            }
+        }
     }
     
     private func setupWindowFocusMonitor() {

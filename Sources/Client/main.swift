@@ -165,12 +165,20 @@ struct InputEvent: Codable {
     let flags: UInt64?
 }
 
+// Status message from Client to Host
+struct StatusMessage: Codable {
+    let message: String
+}
+
 let INPUT_PORT: UInt16 = 9876
+let STATUS_PORT: UInt16 = 9877
 
 class InputReceiver {
     private var listener: NWListener?
     private var connection: NWConnection?
     private var buffer = Data()
+    private var statusConnection: NWConnection?
+    private var hostIP: String?
     
     func start() {
         listener?.cancel()
@@ -190,12 +198,43 @@ class InputReceiver {
                 self?.connection?.cancel()
                 self?.buffer = Data()
                 self?.connection = conn
+                
+                // Extract host IP for status connection
+                if case .hostPort(let host, _) = conn.endpoint {
+                    self?.hostIP = "\(host)"
+                    self?.connectStatusChannel()
+                }
+                
                 conn.start(queue: .main)
                 self?.receiveData()
             }
             listener?.start(queue: .main)
         } catch {
             print("[Input] Failed to start server: \(error)")
+        }
+    }
+    
+    private func connectStatusChannel() {
+        guard let hostIP = hostIP else { return }
+        
+        statusConnection?.cancel()
+        statusConnection = NWConnection(
+            host: NWEndpoint.Host(hostIP),
+            port: NWEndpoint.Port(rawValue: STATUS_PORT)!,
+            using: .tcp
+        )
+        statusConnection?.start(queue: .main)
+        sendStatus("Client ready - event poster thread running")
+    }
+    
+    private func sendStatus(_ message: String) {
+        guard let conn = statusConnection else { return }
+        
+        if let data = try? JSONEncoder().encode(StatusMessage(message: message)) {
+            var length = UInt32(data.count).bigEndian
+            var frameData = Data(bytes: &length, count: 4)
+            frameData.append(data)
+            conn.send(content: frameData, completion: .contentProcessed { _ in })
         }
     }
     
@@ -241,45 +280,55 @@ class InputReceiver {
     }
     
     private func handleEvent(_ event: InputEvent) {
+        sendStatus("Processing: \(event.type)")
+        
         switch event.type {
         case .mouseMove:
             if let x = event.x, let y = event.y {
                 eventPoster.postMouseMove(x: x, y: y)
+                sendStatus("✓ mouseMove")
             }
             
         case .mouseDown:
             if let x = event.x, let y = event.y, let button = event.button {
                 eventPoster.postMouseButton(x: x, y: y, button: button, isDown: true)
+                sendStatus("✓ mouseDown")
             }
             
         case .mouseUp:
             if let x = event.x, let y = event.y, let button = event.button {
                 eventPoster.postMouseButton(x: x, y: y, button: button, isDown: false)
+                sendStatus("✓ mouseUp")
             }
             
         case .mouseDrag:
             if let x = event.x, let y = event.y, let button = event.button {
                 eventPoster.postMouseDrag(x: x, y: y, button: button)
+                sendStatus("✓ mouseDrag")
             }
             
         case .scroll:
             if let deltaX = event.deltaX, let deltaY = event.deltaY {
                 eventPoster.postScroll(deltaX: deltaX, deltaY: deltaY)
+                sendStatus("✓ scroll")
             }
             
         case .keyDown:
             if let keyCode = event.keyCode {
                 eventPoster.postKey(keyCode: keyCode, flags: event.flags ?? 0, isDown: true)
+                sendStatus("✓ keyDown \(keyCode)")
             }
             
         case .keyUp:
             if let keyCode = event.keyCode {
                 eventPoster.postKey(keyCode: keyCode, flags: event.flags ?? 0, isDown: false)
+                sendStatus("✓ keyUp \(keyCode)")
             }
             
         case .flagsChanged:
             if let flags = event.flags {
                 eventPoster.postFlagsChanged(flags: flags)
+                sendStatus("✓ flagsChanged")
             }
         }
     }
