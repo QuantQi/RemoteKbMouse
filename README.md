@@ -52,11 +52,18 @@ Listens on port 9876. New connections automatically kill existing ones.
 
 Launches fullscreen video display from capture card at maximum resolution/refresh rate.
 
-### Toggling Control
+### Control Switching
 
-Press **Cmd+Option+Ctrl+C** to toggle between:
-- 🟢 **Local mode**: Keyboard/mouse controls Host Mac
-- 🔴 **Remote mode**: Keyboard/mouse controls Client Mac (via network)
+Two ways to switch between controlling Host and Client:
+
+**1. Automatic (default):**
+- Click on/focus the video window → Control goes to **Client**
+- Click elsewhere or switch apps → Control returns to **Host**
+
+**2. Manual hotkey:**
+- Press **Cmd+Option+Ctrl+C** to toggle manual override mode
+- When manual override is ON, auto-switching is disabled
+- Press again to return to auto-switch mode
 
 ## Permissions
 

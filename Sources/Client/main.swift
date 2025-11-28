@@ -1,5 +1,23 @@
 import Cocoa
 import Network
+import ApplicationServices
+
+// Check accessibility permissions
+func checkAccessibility() -> Bool {
+    let trusted = AXIsProcessTrusted()
+    if !trusted {
+        print("⚠️  Accessibility permission required!")
+        print("   Go to: System Settings → Privacy & Security → Accessibility")
+        print("   Add this app to the list and enable it.")
+        print("")
+        print("   Attempting to prompt for permission...")
+        
+        // This will prompt the user to grant permission
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
+    }
+    return trusted
+}
 
 // Shared protocol for mouse/keyboard events
 struct InputEvent: Codable {
@@ -200,6 +218,16 @@ class InputReceiver {
 print("=== Remote Keyboard/Mouse Client ===")
 print("Listening for input events on port \(INPUT_PORT)")
 print("New connections will kill existing ones")
+print("")
+
+// Check accessibility first
+let hasAccess = checkAccessibility()
+if hasAccess {
+    print("✅ Accessibility permission granted")
+} else {
+    print("⏳ Waiting for accessibility permission...")
+    print("   Grant permission, then restart this app.")
+}
 print("")
 
 let inputReceiver = InputReceiver()

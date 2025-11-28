@@ -105,7 +105,7 @@ class VideoWindow: NSWindow {
 
 class VideoCapture: NSObject {
     private var captureSession: AVCaptureSession?
-    private var window: VideoWindow?
+    var window: VideoWindow?
     private var previewView: VideoPreviewView?
     
     override init() {
@@ -116,6 +116,10 @@ class VideoCapture: NSObject {
     func start() {
         setupWindow()
         setupCapture()
+    }
+    
+    func isWindowKey() -> Bool {
+        return window?.isKeyWindow ?? false
     }
     
     private func setupWindow() {
@@ -217,7 +221,9 @@ class InputController {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isCapturing = false
+    private var manualOverride = false  // When true, ignore auto-switching
     private let clientAddress: String
+    weak var videoCapture: VideoCapture?
     
     // Key code for 'C' key
     private let cKeyCode: UInt16 = 8
@@ -225,8 +231,69 @@ class InputController {
     init(clientAddress: String) {
         self.clientAddress = clientAddress
         print("[Input] Target client: \(clientAddress):\(PORT)")
-        print("[Input] Press Cmd+Option+Ctrl+C to toggle capture mode")
+        print("[Input] Press Cmd+Option+Ctrl+C to toggle capture mode (manual override)")
+        print("[Input] Auto-switch: Focus video window = client, focus other = host")
         setupHotkeyMonitor()
+        setupWindowFocusMonitor()
+    }
+    
+    private func setupWindowFocusMonitor() {
+        // Monitor for window focus changes
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleWindowFocusChange(notification)
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleWindowFocusChange(notification)
+        }
+        
+        // Also monitor app activation
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.checkAutoSwitch()
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // App lost focus, switch to local
+            guard let self = self, !self.manualOverride else { return }
+            if self.isCapturing {
+                print("[Auto] App lost focus -> local mode")
+                self.stopCapturing()
+            }
+        }
+    }
+    
+    private func handleWindowFocusChange(_ notification: Notification) {
+        checkAutoSwitch()
+    }
+    
+    private func checkAutoSwitch() {
+        guard !manualOverride else { return }
+        
+        let videoWindowIsKey = videoCapture?.isWindowKey() ?? false
+        
+        if videoWindowIsKey && !isCapturing {
+            print("[Auto] Video window focused -> client mode")
+            startCapturing()
+        } else if !videoWindowIsKey && isCapturing {
+            print("[Auto] Video window lost focus -> local mode")
+            stopCapturing()
+        }
     }
     
     private func setupHotkeyMonitor() {
@@ -266,10 +333,19 @@ class InputController {
             
             if keyCode == cKeyCode && hasCmd && hasOpt && hasCtrl {
                 DispatchQueue.main.async { [weak self] in
-                    if self?.isCapturing == true {
-                        self?.stopCapturing()
+                    guard let self = self else { return }
+                    // Toggle manual override
+                    self.manualOverride = !self.manualOverride
+                    if self.manualOverride {
+                        print("[Manual] Override ON - auto-switch disabled")
+                        if self.isCapturing {
+                            self.stopCapturing()
+                        } else {
+                            self.startCapturing()
+                        }
                     } else {
-                        self?.startCapturing()
+                        print("[Manual] Override OFF - auto-switch enabled")
+                        self.checkAutoSwitch()
                     }
                 }
                 return nil
@@ -463,15 +539,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         print("=== Remote Keyboard/Mouse Host ===")
         print("Client IP: \(clientIP)")
-        print("Press Cmd+Option+Ctrl+C to toggle input capture")
         print("")
         
         // Start video capture and display
         videoCapture = VideoCapture()
         videoCapture?.start()
         
-        // Start input controller
+        // Start input controller with reference to video capture
         inputController = InputController(clientAddress: clientIP)
+        inputController?.videoCapture = videoCapture
+        
+        print("")
     }
 }
 
