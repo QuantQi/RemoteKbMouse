@@ -344,7 +344,12 @@ class InputController {
     
     private func processStatusBuffer() {
         while statusBuffer.count >= 4 {
-            let length = statusBuffer.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+            // Read length safely without assuming alignment
+            let lengthBytes = statusBuffer.prefix(4)
+            let length = UInt32(bigEndian: UInt32(lengthBytes[0]) << 24 | 
+                                           UInt32(lengthBytes[1]) << 16 | 
+                                           UInt32(lengthBytes[2]) << 8 | 
+                                           UInt32(lengthBytes[3]))
             let totalLength = 4 + Int(length)
             
             guard statusBuffer.count >= totalLength else { break }
