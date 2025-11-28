@@ -264,10 +264,11 @@ class InputController {
     private var connection: NWConnection?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var isCapturing = false
-    private var manualOverride = false  // When true, ignore auto-switching
+    private(set) var isCapturing = false
+    var autoSwitchEnabled = false  // Disabled by default
     private let clientAddress: String
     weak var videoCapture: VideoCapture?
+    weak var appDelegate: AppDelegate?
     
     // Key code for 'C' key
     private let cKeyCode: UInt16 = 8
@@ -275,8 +276,8 @@ class InputController {
     init(clientAddress: String) {
         self.clientAddress = clientAddress
         print("[Input] Target client: \(clientAddress):\(PORT)")
-        print("[Input] Press Cmd+Option+Ctrl+C to toggle capture mode (manual override)")
-        print("[Input] Auto-switch: Focus video window = client, focus other = host")
+        print("[Input] Press Cmd+Option+Ctrl+C to toggle capture mode")
+        print("[Input] Auto-switch is DISABLED by default (enable via menu bar)")
         setupHotkeyMonitor()
         setupWindowFocusMonitor()
     }
@@ -313,8 +314,7 @@ class InputController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            // App lost focus, switch to local
-            guard let self = self, !self.manualOverride else { return }
+            guard let self = self, self.autoSwitchEnabled else { return }
             if self.isCapturing {
                 print("[Auto] App lost focus -> local mode")
                 self.stopCapturing()
@@ -327,7 +327,7 @@ class InputController {
     }
     
     private func checkAutoSwitch() {
-        guard !manualOverride else { return }
+        guard autoSwitchEnabled else { return }
         
         let videoWindowIsKey = videoCapture?.isWindowKey() ?? false
         
@@ -378,18 +378,11 @@ class InputController {
             if keyCode == cKeyCode && hasCmd && hasOpt && hasCtrl {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
-                    // Toggle manual override
-                    self.manualOverride = !self.manualOverride
-                    if self.manualOverride {
-                        print("[Manual] Override ON - auto-switch disabled")
-                        if self.isCapturing {
-                            self.stopCapturing()
-                        } else {
-                            self.startCapturing()
-                        }
+                    // Simple toggle
+                    if self.isCapturing {
+                        self.stopCapturing()
                     } else {
-                        print("[Manual] Override OFF - auto-switch enabled")
-                        self.checkAutoSwitch()
+                        self.startCapturing()
                     }
                 }
                 return nil
@@ -463,6 +456,7 @@ class InputController {
         
         isCapturing = true
         videoCapture?.setControlMode(isClient: true)
+        appDelegate?.updateControlStatus(isClient: true)
         print("🔴 [Input] Capturing - events sent to client")
     }
     
@@ -481,7 +475,8 @@ class InputController {
         connection = nil
         isCapturing = false
         videoCapture?.setControlMode(isClient: false)
-        print("🟢 [Input] Local mode - events stay on host")
+        appDelegate?.updateControlStatus(isClient: false)
+        print("🟢 [Input] Local mode - events stays on host")
     }
     
     private func handleCapturedEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -591,6 +586,9 @@ class InputController {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var videoCapture: VideoCapture?
     var inputController: InputController?
+    var statusItem: NSStatusItem?
+    var autoSwitchMenuItem: NSMenuItem?
+    var controlMenuItem: NSMenuItem?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         let clientIP = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : DEFAULT_CLIENT_IP
@@ -599,6 +597,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("Client IP: \(clientIP)")
         print("")
         
+        // Setup menu bar
+        setupMenuBar()
+        
         // Start video capture and display
         videoCapture = VideoCapture()
         videoCapture?.start()
@@ -606,8 +607,72 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Start input controller with reference to video capture
         inputController = InputController(clientAddress: clientIP)
         inputController?.videoCapture = videoCapture
+        inputController?.appDelegate = self
         
         print("")
+    }
+    
+    private func setupMenuBar() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        
+        if let button = statusItem?.button {
+            button.title = "🖥️"
+        }
+        
+        let menu = NSMenu()
+        
+        // Control toggle
+        controlMenuItem = NSMenuItem(title: "🟢 Control: HOST", action: #selector(toggleControl), keyEquivalent: "")
+        controlMenuItem?.target = self
+        menu.addItem(controlMenuItem!)
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        // Auto-switch toggle
+        autoSwitchMenuItem = NSMenuItem(title: "Auto-Switch: OFF", action: #selector(toggleAutoSwitch), keyEquivalent: "")
+        autoSwitchMenuItem?.target = self
+        menu.addItem(autoSwitchMenuItem!)
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        // Quit
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quitItem)
+        
+        statusItem?.menu = menu
+    }
+    
+    @objc func toggleControl() {
+        if inputController?.isCapturing == true {
+            inputController?.stopCapturing()
+            controlMenuItem?.title = "🟢 Control: HOST"
+        } else {
+            inputController?.startCapturing()
+            controlMenuItem?.title = "🔴 Control: CLIENT"
+        }
+    }
+    
+    @objc func toggleAutoSwitch() {
+        guard let controller = inputController else { return }
+        controller.autoSwitchEnabled = !controller.autoSwitchEnabled
+        
+        if controller.autoSwitchEnabled {
+            autoSwitchMenuItem?.title = "Auto-Switch: ON ✓"
+            print("[Menu] Auto-switch ENABLED")
+        } else {
+            autoSwitchMenuItem?.title = "Auto-Switch: OFF"
+            print("[Menu] Auto-switch DISABLED")
+        }
+    }
+    
+    func updateControlStatus(isClient: Bool) {
+        DispatchQueue.main.async {
+            if isClient {
+                self.controlMenuItem?.title = "🔴 Control: CLIENT"
+            } else {
+                self.controlMenuItem?.title = "🟢 Control: HOST"
+            }
+        }
     }
 }
 

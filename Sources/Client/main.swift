@@ -218,14 +218,17 @@ class InputReceiver {
     // MARK: - Event Simulation
     
     private func moveMouse(to point: CGPoint) {
-        print("[DEBUG] Creating mouseMoved CGEvent...")
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
-            print("[DEBUG] Failed to create mouseMoved event!")
-            return
+        print("[DEBUG] moveMouse: Start - point=(\(point.x), \(point.y))")
+        print("[DEBUG] moveMouse: About to create CGEvent...")
+        
+        // Try using CGWarpMouseCursorPosition instead - simpler API
+        let result = CGWarpMouseCursorPosition(point)
+        if result == .success {
+            print("[DEBUG] moveMouse: CGWarpMouseCursorPosition succeeded")
+        } else {
+            print("[DEBUG] moveMouse: CGWarpMouseCursorPosition failed with \(result)")
         }
-        print("[DEBUG] Posting mouseMoved event...")
-        event.post(tap: .cgSessionEventTap)
-        print("[DEBUG] mouseMoved posted successfully")
+        print("[DEBUG] moveMouse: Complete")
     }
     
     private func mouseDown(at point: CGPoint, button: Int) {
