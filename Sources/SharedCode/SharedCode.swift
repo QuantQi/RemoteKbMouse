@@ -10,12 +10,12 @@ public enum NetworkConstants {
 public struct RemoteKeyboardEvent: Codable {
     
     // Using raw values to be Codable
-    let keyCode: UInt16
-    let eventType: EventType
-    let flags: UInt64
+    public let keyCode: UInt16
+    public let eventType: EventType
+    public let flags: UInt64
 
     // A simpler, Codable version of CGEventType
-    enum EventType: Codable {
+    public enum EventType: Codable {
         case keyDown
         case keyUp
     }

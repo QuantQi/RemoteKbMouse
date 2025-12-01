@@ -3,10 +3,18 @@ import AVFoundation
 import Network
 import CoreGraphics
 import SharedCode
+import AppKit
 
 @main
 struct ClientApp: App {
     @StateObject private var kvmController = KVMController()
+    
+    init() {
+        // Required for SwiftUI apps built with SPM and run from terminal
+        // This ensures the app appears as a regular GUI application
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -44,14 +52,51 @@ class KVMController: ObservableObject {
     private let magicComboKey: CGKeyCode = 59 // Left Control
     private var lastMagicKeyPressTime: TimeInterval = 0
     
+    // Cached permission state (checked once at launch)
+    private var hasInputMonitoringPermission: Bool = false
+    
     init() {
         print("KVMController initialized.")
+        checkAndCachePermissions()
         setupVideoCapture()
         startBrowsing()
     }
     
     deinit {
+        stop()
+    }
+    
+    /// Check permissions once at launch and cache the result
+    private func checkAndCachePermissions() {
+        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
+        hasInputMonitoringPermission = AXIsProcessTrustedWithOptions(options)
+        
+        if !hasInputMonitoringPermission {
+            print("\n--- PERMISSION REQUIRED ---")
+            print("This application needs Input Monitoring permissions to capture keyboard events.")
+            print("Please go to System Settings > Privacy & Security > Input Monitoring and enable it for 'Client'.")
+            print("---------------------------\n")
+        }
+    }
+    
+    /// Clean up all resources
+    func stop() {
         stopEventTap()
+        
+        // Stop browsing
+        browser?.cancel()
+        browser = nil
+        
+        // Cancel connection
+        connection?.cancel()
+        connection = nil
+        
+        // Stop capture session
+        if captureSession.isRunning {
+            captureSession.stopRunning()
+        }
+        
+        print("KVMController resources cleaned up.")
     }
     
     func toggleRemoteControl() {
@@ -72,8 +117,22 @@ class KVMController: ObservableObject {
         let descriptor = NWBrowser.Descriptor.bonjour(type: NetworkConstants.serviceType, domain: nil)
         browser = NWBrowser(for: descriptor, using: .tcp)
         
-        browser?.stateUpdateHandler = { newState in
+        browser?.stateUpdateHandler = { [weak self] newState in
             print("Browser state updated: \(newState)")
+            switch newState {
+            case .failed(let error):
+                print("Browser failed with error: \(error). Restarting...")
+                self?.browser?.cancel()
+                self?.browser = nil
+                // Restart browsing after a short delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self?.startBrowsing()
+                }
+            case .cancelled:
+                print("Browser cancelled.")
+            default:
+                break
+            }
         }
         
         browser?.browseResultsChangedHandler = { results, changes in
@@ -121,7 +180,14 @@ class KVMController: ObservableObject {
         do {
             let data = try encoder.encode(event)
             let framedData = data + "\n".data(using: .utf8)!
-            connection?.send(content: framedData, completion: .idempotent)
+            connection?.send(content: framedData, completion: .contentProcessed { [weak self] error in
+                if let error = error {
+                    print("Send failed: \(error). Releasing control.")
+                    DispatchQueue.main.async {
+                        self?.isControllingRemote = false
+                    }
+                }
+            })
         } catch {
             print("Failed to encode and send event: \(error)")
         }
@@ -133,13 +199,15 @@ class KVMController: ObservableObject {
         guard eventTap == nil else { return }
         print("Starting event tap...")
         
-        // Check for permissions
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
-        guard AXIsProcessTrustedWithOptions(options) else {
-            print("\n--- PERMISSION REQUIRED ---")
-            print("This application needs Input Monitoring permissions to capture keyboard events.")
-            print("Please go to System Settings > Privacy & Security > Input Monitoring and enable it for 'Client'.")
-            print("---------------------------\n")
+        // Use cached permission state; re-check without prompting
+        // (User was already prompted once at launch)
+        if !hasInputMonitoringPermission {
+            // Re-check silently in case user granted permission after launch
+            hasInputMonitoringPermission = AXIsProcessTrusted()
+        }
+        
+        guard hasInputMonitoringPermission else {
+            print("Input Monitoring permission not granted. Cannot start event tap.")
             DispatchQueue.main.async { self.isControllingRemote = false }
             return
         }
@@ -154,7 +222,7 @@ class KVMController: ObservableObject {
             options: .defaultTap,
             eventsOfInterest: (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue),
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 
                 // Get the KVMController instance
                 let mySelf = Unmanaged<KVMController>.fromOpaque(refcon).takeUnretainedValue()
@@ -204,7 +272,7 @@ class KVMController: ObservableObject {
         
         // If we're not controlling remote, pass the event through unmodified
         guard isControllingRemote else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
         
         // If we are controlling remote, create our custom event and send it

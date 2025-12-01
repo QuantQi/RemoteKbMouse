@@ -1,19 +1,24 @@
 import Foundation
 import Network
 import CoreGraphics
-import ApplicationServices // <-- FIX 1: Import ApplicationServices
+import ApplicationServices
 import SharedCode
 
 class Server {
-    let listener: NWListener
+    private var listener: NWListener
+    private let port: NWEndpoint.Port
+    
+    // Cached permission state (checked once at launch)
+    private var hasAccessibilityPermission: Bool = false
 
     init(port: NWEndpoint.Port) {
+        self.port = port
         let parameters = NWParameters.tcp
         
         do {
             listener = try NWListener(using: parameters, on: port)
             
-            // Enable Bonjour advertising <-- FIX 2: Set service on the listener
+            // Enable Bonjour advertising
             listener.service = NWListener.Service(name: "RemoteKVMServer", type: NetworkConstants.serviceType)
             
             listener.stateUpdateHandler = self.stateDidChange(to:)
@@ -27,15 +32,32 @@ class Server {
         print("Server starting...")
         listener.start(queue: .main)
         
-        // Check for accessibility permissions and guide the user if needed
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
-        let accessEnabled = AXIsProcessTrustedWithOptions(options)
+        // Check for accessibility permissions once and cache the result
+        if !hasAccessibilityPermission {
+            let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
+            hasAccessibilityPermission = AXIsProcessTrustedWithOptions(options)
 
-        if !accessEnabled {
-            print("\n--- PERMISSION REQUIRED ---")
-            print("This application needs Accessibility permissions to simulate keyboard events.")
-            print("Please go to System Settings > Privacy & Security > Accessibility and enable it for 'Server'.")
-            print("---------------------------\n")
+            if !hasAccessibilityPermission {
+                print("\n--- PERMISSION REQUIRED ---")
+                print("This application needs Accessibility permissions to simulate keyboard events.")
+                print("Please go to System Settings > Privacy & Security > Accessibility and enable it for 'Server'.")
+                print("---------------------------\n")
+            }
+        }
+    }
+    
+    /// Creates a new listener instance (required after cancel)
+    private func rebuildListener() {
+        let parameters = NWParameters.tcp
+        
+        do {
+            listener = try NWListener(using: parameters, on: port)
+            listener.service = NWListener.Service(name: "RemoteKVMServer", type: NetworkConstants.serviceType)
+            listener.stateUpdateHandler = self.stateDidChange(to:)
+            listener.newConnectionHandler = self.didAccept(nwConnection:)
+        } catch {
+            print("Failed to rebuild listener: \(error). Exiting.")
+            exit(1)
         }
     }
 
@@ -44,8 +66,10 @@ class Server {
         case .ready:
             print("Server ready and advertising on port \(listener.port?.debugDescription ?? "?")")
         case .failed(let error):
-            print("Server failed with error: \(error). Restarting.")
+            print("Server failed with error: \(error). Rebuilding listener...")
             listener.cancel()
+            // After cancel, listener cannot be reused - must create a new one
+            rebuildListener()
             start()
         default:
             break
@@ -55,7 +79,7 @@ class Server {
     private func didAccept(nwConnection: NWConnection) {
         print("Accepted new connection from \(nwConnection.endpoint)")
         let connection = ServerConnection(nwConnection: nwConnection)
-        connection.didStopCallback = { // <-- FIX 3: Remove unused capture
+        connection.didStopCallback = {
             // Handle cleanup if needed when a connection closes
             print("Connection with \(nwConnection.endpoint) stopped.")
         }
