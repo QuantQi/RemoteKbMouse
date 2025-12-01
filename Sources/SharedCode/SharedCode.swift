@@ -53,10 +53,10 @@ public struct RemoteKeyboardEvent: Codable {
 public struct RemoteMouseEvent: Codable {
     
     public let eventType: MouseEventType
-    public let x: Double           // Normalized 0.0 - 1.0 (percentage of screen)
-    public let y: Double           // Normalized 0.0 - 1.0 (percentage of screen)
-    public let deltaX: Double      // For scroll events
-    public let deltaY: Double      // For scroll events
+    public let deltaX: Double      // Mouse movement delta X
+    public let deltaY: Double      // Mouse movement delta Y
+    public let scrollDeltaX: Double // For scroll events
+    public let scrollDeltaY: Double // For scroll events
     public let buttonNumber: Int32 // 0 = left, 1 = right, 2 = middle/other
     public let clickState: Int64   // For double/triple click detection
     
@@ -75,14 +75,13 @@ public struct RemoteMouseEvent: Codable {
     }
     
     public init?(event: CGEvent, screenSize: CGSize) {
-        let location = event.location
+        // Use delta values for mouse movement (works even with disassociated cursor)
+        self.deltaX = Double(event.getIntegerValueField(.mouseEventDeltaX))
+        self.deltaY = Double(event.getIntegerValueField(.mouseEventDeltaY))
         
-        // Normalize coordinates to 0.0 - 1.0 range
-        self.x = Double(location.x / screenSize.width)
-        self.y = Double(location.y / screenSize.height)
-        
-        self.deltaX = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
-        self.deltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
+        // Scroll wheel deltas are separate
+        self.scrollDeltaX = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+        self.scrollDeltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
         self.buttonNumber = Int32(event.getIntegerValueField(.mouseEventButtonNumber))
         self.clickState = event.getIntegerValueField(.mouseEventClickState)
         
@@ -115,10 +114,16 @@ public struct RemoteMouseEvent: Codable {
     }
     
     public func toCGEvent(screenSize: CGSize) -> CGEvent? {
-        // Convert normalized coordinates back to screen coordinates
-        let absoluteX = x * Double(screenSize.width)
-        let absoluteY = y * Double(screenSize.height)
-        let point = CGPoint(x: absoluteX, y: absoluteY)
+        // Get current mouse position and apply delta
+        let currentLocation = CGEvent(source: nil)?.location ?? CGPoint.zero
+        var newX = currentLocation.x + deltaX
+        var newY = currentLocation.y + deltaY
+        
+        // Clamp to screen bounds
+        newX = max(0, min(newX, Double(screenSize.width) - 1))
+        newY = max(0, min(newY, Double(screenSize.height) - 1))
+        
+        let point = CGPoint(x: newX, y: newY)
         
         let cgEventType: CGEventType
         let mouseButton: CGMouseButton
@@ -155,8 +160,8 @@ public struct RemoteMouseEvent: Codable {
             cgEventType = .otherMouseDragged
             mouseButton = .center
         case .scrollWheel:
-            // Scroll events are created differently
-            guard let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(deltaY * 10), wheel2: Int32(deltaX * 10), wheel3: 0) else {
+            // Scroll events are created differently - use scroll deltas
+            guard let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(scrollDeltaY * 10), wheel2: Int32(scrollDeltaX * 10), wheel3: 0) else {
                 return nil
             }
             return scrollEvent
@@ -165,6 +170,10 @@ public struct RemoteMouseEvent: Codable {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: cgEventType, mouseCursorPosition: point, mouseButton: mouseButton) else {
             return nil
         }
+        
+        // Set delta values in the event (some apps need these)
+        event.setIntegerValueField(.mouseEventDeltaX, value: Int64(deltaX))
+        event.setIntegerValueField(.mouseEventDeltaY, value: Int64(deltaY))
         
         // Set click state for double/triple clicks
         if clickState > 1 {
