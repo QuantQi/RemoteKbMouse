@@ -20,6 +20,14 @@ struct ClientApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(kvmController)
+                .onAppear {
+                    // Enter fullscreen mode when the window appears
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        if let window = NSApplication.shared.windows.first {
+                            window.toggleFullScreen(nil)
+                        }
+                    }
+                }
         }
     }
 }
@@ -135,7 +143,8 @@ class KVMController: ObservableObject {
             }
         }
         
-        browser?.browseResultsChangedHandler = { results, changes in
+        browser?.browseResultsChangedHandler = { [weak self] results, changes in
+            guard let self = self else { return }
             guard let result = results.first else {
                 self.connection?.cancel()
                 self.connection = nil
@@ -287,7 +296,7 @@ class KVMController: ObservableObject {
     private func setupVideoCapture() {
         var device: AVCaptureDevice?
 
-        // First, try to find an external device
+        // First, try to find an external device (capture card)
         let externalDiscoverySession = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.externalUnknown],
             mediaType: .video,
@@ -312,6 +321,55 @@ class KVMController: ObservableObject {
         }
         
         print("Using video device: \(finalDevice.localizedName)")
+        
+        // Configure for highest quality
+        captureSession.sessionPreset = .high
+        
+        // Try to select the best format (highest resolution and frame rate)
+        do {
+            try finalDevice.lockForConfiguration()
+            
+            // Find the best format - prefer highest resolution with highest frame rate
+            let formats = finalDevice.formats
+            var bestFormat: AVCaptureDevice.Format?
+            var bestFrameRate: Float64 = 0
+            var bestResolution: Int32 = 0
+            
+            for format in formats {
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                let resolution = dimensions.width * dimensions.height
+                
+                for range in format.videoSupportedFrameRateRanges {
+                    let frameRate = range.maxFrameRate
+                    // Prefer higher resolution, then higher frame rate
+                    if resolution > bestResolution || (resolution == bestResolution && frameRate > bestFrameRate) {
+                        bestFormat = format
+                        bestFrameRate = frameRate
+                        bestResolution = resolution
+                    }
+                }
+            }
+            
+            if let bestFormat = bestFormat {
+                finalDevice.activeFormat = bestFormat
+                
+                // Set to max frame rate
+                for range in bestFormat.videoSupportedFrameRateRanges {
+                    if range.maxFrameRate == bestFrameRate {
+                        finalDevice.activeVideoMinFrameDuration = range.minFrameDuration
+                        finalDevice.activeVideoMaxFrameDuration = range.minFrameDuration
+                        break
+                    }
+                }
+                
+                let dims = CMVideoFormatDescriptionGetDimensions(bestFormat.formatDescription)
+                print("Video configured: \(dims.width)x\(dims.height) @ \(bestFrameRate) fps")
+            }
+            
+            finalDevice.unlockForConfiguration()
+        } catch {
+            print("Could not configure video device: \(error)")
+        }
 
         do {
             // Make sure to remove any existing input before adding a new one
@@ -339,11 +397,12 @@ struct VideoView: NSViewRepresentable {
     let session: AVCaptureSession
     
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+        let view = VideoContainerView()
         view.wantsLayer = true
         
         let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.videoGravity = .resizeAspect
+        previewLayer.videoGravity = .resizeAspectFill  // Fill the entire view
+        previewLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         
         if #available(macOS 14.0, *) {
             previewLayer.connection?.videoRotationAngle = 0
@@ -355,33 +414,82 @@ struct VideoView: NSViewRepresentable {
     }
     
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView.layer as? AVCaptureVideoPreviewLayer)?.session = session
+        if let previewLayer = nsView.layer as? AVCaptureVideoPreviewLayer {
+            previewLayer.session = session
+            // Ensure the layer fills the view
+            previewLayer.frame = nsView.bounds
+        }
+    }
+}
+
+// Custom NSView that updates layer frame on resize
+class VideoContainerView: NSView {
+    override func layout() {
+        super.layout()
+        layer?.frame = bounds
     }
 }
 
 
 struct ContentView: View {
     @EnvironmentObject var kvmController: KVMController
+    @State private var showControls = true
     
     var body: some View {
         ZStack {
-            // Live video feed
+            // Live video feed - fills entire screen
             VideoView(session: kvmController.captureSession)
-                .edgesIgnoringSafeArea(.all)
-
-            VStack {
-                Spacer()
-                Button(action: {
-                    kvmController.toggleRemoteControl()
-                }) {
-                    Text(kvmController.isControllingRemote ? "Release Control" : "Control MacBook")
-                        .padding()
-                        .background(kvmController.isControllingRemote ? Color.red : Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
+                .ignoresSafeArea(.all)
+                .onTapGesture {
+                    // Toggle control visibility on tap
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showControls.toggle()
+                    }
                 }
-                .padding()
+
+            // Overlay controls (can be hidden)
+            if showControls {
+                VStack {
+                    // Status bar at top
+                    HStack {
+                        Text(kvmController.isControllingRemote ? "🟢 Controlling Remote" : "⚪ Local Mode")
+                            .font(.caption)
+                            .padding(8)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        
+                        Spacer()
+                        
+                        Text("Double-tap Left Control to release")
+                            .font(.caption)
+                            .padding(8)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.gray)
+                            .cornerRadius(8)
+                            .opacity(kvmController.isControllingRemote ? 1 : 0)
+                    }
+                    .padding()
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        kvmController.toggleRemoteControl()
+                    }) {
+                        Text(kvmController.isControllingRemote ? "Release Control (or double-tap Left Ctrl)" : "Control MacBook")
+                            .font(.headline)
+                            .padding()
+                            .frame(minWidth: 250)
+                            .background(kvmController.isControllingRemote ? Color.red : Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 40)
+                }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
     }
 }
