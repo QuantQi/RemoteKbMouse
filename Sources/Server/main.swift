@@ -159,7 +159,7 @@ class ServerConnection {
             
             switch inputEvent {
             case .keyboard(let keyboardEvent):
-                print("Received keyboard event: keyCode=\(keyboardEvent.keyCode)")
+                //print("Received keyboard event: keyCode=\(keyboardEvent.keyCode)")
                 if let cgEvent = keyboardEvent.toCGEvent() {
                     cgEvent.post(tap: .cgSessionEventTap)
                 } else {
@@ -174,7 +174,7 @@ class ServerConnection {
                     cgEvent.post(tap: .cgSessionEventTap)
                     // Only log non-move events to reduce spam
                     if mouseEvent.eventType != .moved {
-                        print("Posted mouse event: \(mouseEvent.eventType)")
+                       // print("Posted mouse event: \(mouseEvent.eventType)")
                     }
                 } else {
                     print("Failed to convert mouse event to CGEvent")
