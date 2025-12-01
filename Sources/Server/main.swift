@@ -155,21 +155,43 @@ class ServerConnection {
     private func handleMessage(_ data: Data) {
         do {
             let decoder = JSONDecoder()
-            let event = try decoder.decode(RemoteKeyboardEvent.self, from: data)
+            let inputEvent = try decoder.decode(RemoteInputEvent.self, from: data)
             
-            print("Received event: keyCode=\(event.keyCode) type=\(event.eventType)")
-            
-            // Convert to CGEvent and post it
-            if let cgEvent = event.toCGEvent() {
-                cgEvent.post(tap: .cgSessionEventTap)
-                print("Posted CGEvent successfully")
-            } else {
-                 print("Failed to convert to CGEvent")
+            switch inputEvent {
+            case .keyboard(let keyboardEvent):
+                print("Received keyboard event: keyCode=\(keyboardEvent.keyCode)")
+                if let cgEvent = keyboardEvent.toCGEvent() {
+                    cgEvent.post(tap: .cgSessionEventTap)
+                } else {
+                    print("Failed to convert keyboard event to CGEvent")
+                }
+                
+            case .mouse(let mouseEvent):
+                // Get screen size for coordinate conversion
+                let screenSize = getMainScreenSize()
+                
+                if let cgEvent = mouseEvent.toCGEvent(screenSize: screenSize) {
+                    cgEvent.post(tap: .cgSessionEventTap)
+                    // Only log non-move events to reduce spam
+                    if mouseEvent.eventType != .moved {
+                        print("Posted mouse event: \(mouseEvent.eventType)")
+                    }
+                } else {
+                    print("Failed to convert mouse event to CGEvent")
+                }
             }
         } catch {
-            print("Failed to decode RemoteKeyboardEvent: \(error)")
+            print("Failed to decode RemoteInputEvent: \(error)")
             print("Raw data: \(String(data: data, encoding: .utf8) ?? "non-utf8")")
         }
+    }
+    
+    private func getMainScreenSize() -> CGSize {
+        // Get the main display's size
+        let mainDisplayID = CGMainDisplayID()
+        let width = CGDisplayPixelsWide(mainDisplayID)
+        let height = CGDisplayPixelsHigh(mainDisplayID)
+        return CGSize(width: width, height: height)
     }
 
     private func stop(error: Error?) {

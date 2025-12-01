@@ -184,7 +184,7 @@ class KVMController: ObservableObject {
         connection?.start(queue: .main)
     }
 
-    func send(event: RemoteKeyboardEvent) {
+    func send(event: RemoteInputEvent) {
         guard connection?.state == .ready else { return }
         
         let encoder = JSONEncoder()
@@ -227,8 +227,29 @@ class KVMController: ObservableObject {
         // The C-style callback function needs a pointer to this class instance
         let selfAsPointer = Unmanaged.passUnretained(self).toOpaque()
         
-        // Create the event tap - capture keyboard events
-        let eventMask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
+        // Create the event tap - capture keyboard AND mouse events
+        // Build masks separately to avoid compiler complexity issues
+        var eventMask: CGEventMask = 0
+        
+        // Keyboard events
+        eventMask |= (1 << CGEventType.keyDown.rawValue)
+        eventMask |= (1 << CGEventType.keyUp.rawValue)
+        eventMask |= (1 << CGEventType.flagsChanged.rawValue)
+        
+        // Mouse movement and clicks
+        eventMask |= (1 << CGEventType.mouseMoved.rawValue)
+        eventMask |= (1 << CGEventType.leftMouseDown.rawValue)
+        eventMask |= (1 << CGEventType.leftMouseUp.rawValue)
+        eventMask |= (1 << CGEventType.leftMouseDragged.rawValue)
+        eventMask |= (1 << CGEventType.rightMouseDown.rawValue)
+        eventMask |= (1 << CGEventType.rightMouseUp.rawValue)
+        eventMask |= (1 << CGEventType.rightMouseDragged.rawValue)
+        eventMask |= (1 << CGEventType.otherMouseDown.rawValue)
+        eventMask |= (1 << CGEventType.otherMouseUp.rawValue)
+        eventMask |= (1 << CGEventType.otherMouseDragged.rawValue)
+        
+        // Scroll wheel (Magic Mouse gestures generate these)
+        eventMask |= (1 << CGEventType.scrollWheel.rawValue)
         
         eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -286,10 +307,9 @@ class KVMController: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
         
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        
-        // Magic Combo check (double tap Left Control)
+        // Magic Combo check (double tap Left Control) - only for keyboard events
         if type == .keyDown {
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             if keyCode == magicComboKey {
                 let currentTime = ProcessInfo.processInfo.systemUptime
                 if currentTime - lastMagicKeyPressTime < 0.3 { // Double tap interval
@@ -307,21 +327,35 @@ class KVMController: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
         
-        // Debug: print what we're capturing
-        print("Capturing event: type=\(type.rawValue) keyCode=\(keyCode)")
-        fflush(stdout)
+        // Determine if this is a keyboard or mouse event and send accordingly
+        let isMouseEvent = [
+            CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+            .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+            .otherMouseDown, .otherMouseUp, .otherMouseDragged, .scrollWheel
+        ].contains(type)
         
-        // If we are controlling remote, create our custom event and send it
-        if let remoteEvent = RemoteKeyboardEvent(event: event) {
-            send(event: remoteEvent)
-            print("Sent remote event: keyCode=\(remoteEvent.keyCode)")
-            fflush(stdout)
+        if isMouseEvent {
+            // Get screen size for coordinate normalization
+            let screenSize = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+            
+            if let remoteEvent = RemoteMouseEvent(event: event, screenSize: screenSize) {
+                send(event: .mouse(remoteEvent))
+                // Only log non-move events to reduce spam
+                if type != .mouseMoved {
+                    print("Sent mouse event: \(remoteEvent.eventType)")
+                    fflush(stdout)
+                }
+            }
         } else {
-            print("Could not create RemoteKeyboardEvent from event type \(type)")
-            fflush(stdout)
+            // Keyboard event
+            if let remoteEvent = RemoteKeyboardEvent(event: event) {
+                send(event: .keyboard(remoteEvent))
+                print("Sent keyboard event: keyCode=\(remoteEvent.keyCode)")
+                fflush(stdout)
+            }
         }
         
-        // And consume the event locally so it doesn't type on the client machine
+        // Consume the event locally so it doesn't affect the client machine
         return nil
     }
     
