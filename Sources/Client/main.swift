@@ -43,8 +43,10 @@ class KVMController: ObservableObject {
         didSet {
             if isControllingRemote {
                 startEventTap()
+                hideCursorAndLock()
             } else {
                 stopEventTap()
+                showCursorAndUnlock()
             }
         }
     }
@@ -58,6 +60,11 @@ class KVMController: ObservableObject {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let magicComboKey: CGKeyCode = 59 // Left Control
+    
+    // Cursor lock position (center of screen)
+    private var cursorLockPosition: CGPoint = .zero
+    private var controlKeyTapCount: Int = 0
+    private var lastControlKeyTime: TimeInterval = 0
     private var lastMagicKeyPressTime: TimeInterval = 0
     
     // Cached permission state (checked once at launch)
@@ -297,6 +304,42 @@ class KVMController: ObservableObject {
         self.eventTap = nil
     }
     
+    // MARK: - Cursor Lock/Hide
+    
+    private func hideCursorAndLock() {
+        // Get screen center for cursor lock position
+        if let screen = NSScreen.main {
+            cursorLockPosition = CGPoint(
+                x: screen.frame.midX,
+                y: screen.frame.midY
+            )
+        }
+        
+        // Hide the cursor
+        CGDisplayHideCursor(CGMainDisplayID())
+        
+        // Move cursor to center
+        CGWarpMouseCursorPosition(cursorLockPosition)
+        
+        // Disassociate mouse movement from cursor position
+        // This prevents the cursor from moving even with mouse input
+        CGAssociateMouseAndMouseCursorPosition(0)
+        
+        print("Cursor hidden and locked at \(cursorLockPosition)")
+        fflush(stdout)
+    }
+    
+    private func showCursorAndUnlock() {
+        // Re-associate mouse and cursor
+        CGAssociateMouseAndMouseCursorPosition(1)
+        
+        // Show the cursor
+        CGDisplayShowCursor(CGMainDisplayID())
+        
+        print("Cursor shown and unlocked")
+        fflush(stdout)
+    }
+    
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Handle tap disabled event (system can disable taps if they take too long)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -307,18 +350,32 @@ class KVMController: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
         
-        // Magic Combo check (double tap Left Control) - only for keyboard events
-        if type == .keyDown {
-            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            if keyCode == magicComboKey {
-                let currentTime = ProcessInfo.processInfo.systemUptime
-                if currentTime - lastMagicKeyPressTime < 0.3 { // Double tap interval
-                    print("Magic combo detected! Releasing control.")
-                    DispatchQueue.main.async { self.isControllingRemote = false }
-                    lastMagicKeyPressTime = 0 // Reset timer
-                    return nil // Consume the event
-                }
-                lastMagicKeyPressTime = currentTime
+        // Magic Combo check: double tap Left Control key
+        // Check both keyDown and flagsChanged for Control key
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let isControlKey = (type == .keyDown && keyCode == magicComboKey) ||
+                          (type == .flagsChanged && keyCode == magicComboKey)
+        
+        if isControlKey {
+            let currentTime = ProcessInfo.processInfo.systemUptime
+            
+            // Reset count if too much time passed
+            if currentTime - lastControlKeyTime > 0.4 {
+                controlKeyTapCount = 0
+            }
+            
+            controlKeyTapCount += 1
+            lastControlKeyTime = currentTime
+            
+            print("Control key tap #\(controlKeyTapCount)")
+            fflush(stdout)
+            
+            if controlKeyTapCount >= 2 {
+                print("Magic combo detected! Releasing control.")
+                fflush(stdout)
+                controlKeyTapCount = 0
+                DispatchQueue.main.async { self.isControllingRemote = false }
+                return nil // Consume the event
             }
         }
         
@@ -340,18 +397,11 @@ class KVMController: ObservableObject {
             
             if let remoteEvent = RemoteMouseEvent(event: event, screenSize: screenSize) {
                 send(event: .mouse(remoteEvent))
-                // Only log non-move events to reduce spam
-                if type != .mouseMoved {
-                    print("Sent mouse event: \(remoteEvent.eventType)")
-                    fflush(stdout)
-                }
             }
         } else {
             // Keyboard event
             if let remoteEvent = RemoteKeyboardEvent(event: event) {
                 send(event: .keyboard(remoteEvent))
-                print("Sent keyboard event: keyCode=\(remoteEvent.keyCode)")
-                fflush(stdout)
             }
         }
         
