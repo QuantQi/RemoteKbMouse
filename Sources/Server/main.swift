@@ -157,14 +157,18 @@ class ServerConnection {
             let decoder = JSONDecoder()
             let event = try decoder.decode(RemoteKeyboardEvent.self, from: data)
             
+            print("Received event: keyCode=\(event.keyCode) type=\(event.eventType)")
+            
             // Convert to CGEvent and post it
             if let cgEvent = event.toCGEvent() {
                 cgEvent.post(tap: .cgSessionEventTap)
+                print("Posted CGEvent successfully")
             } else {
                  print("Failed to convert to CGEvent")
             }
         } catch {
             print("Failed to decode RemoteKeyboardEvent: \(error)")
+            print("Raw data: \(String(data: data, encoding: .utf8) ?? "non-utf8")")
         }
     }
 

@@ -111,12 +111,14 @@ class KVMController: ObservableObject {
         // Only allow controlling remote if we have a connection
         guard connection?.state == .ready else {
             print("Cannot control remote: No server connection.")
+            fflush(stdout)
             return
         }
         
         // This will trigger the didSet observer
         isControllingRemote.toggle()
         print("Remote control toggled: \(isControllingRemote)")
+        fflush(stdout)
     }
     
     // MARK: - Networking
@@ -213,6 +215,7 @@ class KVMController: ObservableObject {
         if !hasInputMonitoringPermission {
             // Re-check silently in case user granted permission after launch
             hasInputMonitoringPermission = AXIsProcessTrusted()
+            print("Re-checked permission: \(hasInputMonitoringPermission)")
         }
         
         guard hasInputMonitoringPermission else {
@@ -224,12 +227,14 @@ class KVMController: ObservableObject {
         // The C-style callback function needs a pointer to this class instance
         let selfAsPointer = Unmanaged.passUnretained(self).toOpaque()
         
-        // Create the event tap
+        // Create the event tap - capture keyboard events
+        let eventMask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
+        
         eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue),
+            eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 
@@ -241,14 +246,22 @@ class KVMController: ObservableObject {
         )
 
         guard let eventTap = eventTap else {
-            print("Failed to create event tap.")
+            print("Failed to create event tap. Make sure Input Monitoring permission is granted.")
+            fflush(stdout)
             DispatchQueue.main.async { self.isControllingRemote = false }
             return
         }
+        
+        print("Event tap created successfully")
+        fflush(stdout)
 
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        
+        // IMPORTANT: Add to MAIN run loop, not current (which might be different in SwiftUI)
+        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
+        print("Event tap enabled and added to main run loop")
+        fflush(stdout)
     }
 
     private func stopEventTap() {
@@ -257,16 +270,26 @@ class KVMController: ObservableObject {
         
         CGEvent.tapEnable(tap: eventTap, enable: false)
         if let runLoopSource = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         }
         self.runLoopSource = nil
         self.eventTap = nil
     }
     
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Handle tap disabled event (system can disable taps if they take too long)
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            print("Event tap was disabled, re-enabling...")
+            if let eventTap = eventTap {
+                CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+        
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        
         // Magic Combo check (double tap Left Control)
         if type == .keyDown {
-            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             if keyCode == magicComboKey {
                 let currentTime = ProcessInfo.processInfo.systemUptime
                 if currentTime - lastMagicKeyPressTime < 0.3 { // Double tap interval
@@ -284,9 +307,18 @@ class KVMController: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
         
+        // Debug: print what we're capturing
+        print("Capturing event: type=\(type.rawValue) keyCode=\(keyCode)")
+        fflush(stdout)
+        
         // If we are controlling remote, create our custom event and send it
         if let remoteEvent = RemoteKeyboardEvent(event: event) {
             send(event: remoteEvent)
+            print("Sent remote event: keyCode=\(remoteEvent.keyCode)")
+            fflush(stdout)
+        } else {
+            print("Could not create RemoteKeyboardEvent from event type \(type)")
+            fflush(stdout)
         }
         
         // And consume the event locally so it doesn't type on the client machine
