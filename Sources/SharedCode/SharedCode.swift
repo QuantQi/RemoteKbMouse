@@ -11,6 +11,33 @@ public enum NetworkConstants {
 public enum RemoteInputEvent: Codable {
     case keyboard(RemoteKeyboardEvent)
     case mouse(RemoteMouseEvent)
+    case screenInfo(ScreenInfoEvent)      // Server tells client its screen size
+    case controlRelease                    // Server tells client to release control (edge hit)
+    case warpCursor(WarpCursorEvent)       // Client tells server to warp cursor
+}
+
+// MARK: - Screen Info Event
+
+public struct ScreenInfoEvent: Codable {
+    public let width: Double
+    public let height: Double
+    
+    public init(width: Double, height: Double) {
+        self.width = width
+        self.height = height
+    }
+}
+
+// MARK: - Warp Cursor Event
+
+public struct WarpCursorEvent: Codable {
+    public let x: Double
+    public let y: Double
+    
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
 }
 
 // MARK: - Keyboard Event

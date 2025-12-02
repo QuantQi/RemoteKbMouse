@@ -53,6 +53,7 @@ class KVMController: ObservableObject {
     // Networking
     private var browser: NWBrowser?
     private var connection: NWConnection?
+    private var serverScreenSize: CGSize = CGSize(width: 1920, height: 1080) // Default, updated on connect
     
     // Event Tap
     private var eventTap: CFMachPort?
@@ -129,6 +130,30 @@ class KVMController: ObservableObject {
         fflush(stdout)
     }
     
+    /// Enter remote control and warp server cursor to right edge
+    private func enterRemoteControl() {
+        guard connection?.state == .ready else { return }
+        guard !isControllingRemote else { return }
+        
+        // Warp server cursor to right edge (at same Y proportion)
+        let clientScreen = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+        let currentPos = CGEvent(source: nil)?.location ?? CGPoint(x: 0, y: clientScreen.height / 2)
+        
+        // Map Y position proportionally from client to server screen
+        let yRatio = currentPos.y / clientScreen.height
+        let serverY = yRatio * serverScreenSize.height
+        let serverX = serverScreenSize.width - 2 // Right edge, slightly inset
+        
+        // Send warp cursor command to server
+        let warpEvent = WarpCursorEvent(x: serverX, y: serverY)
+        send(event: .warpCursor(warpEvent))
+        
+        // Enter remote control mode
+        isControllingRemote = true
+        print("Entered remote control, warped server cursor to (\(serverX), \(serverY))")
+        fflush(stdout)
+    }
+    
     // MARK: - Networking
     
     private func startBrowsing() {
@@ -181,6 +206,7 @@ class KVMController: ObservableObject {
             switch newState {
             case .ready:
                 print("Connection ready.")
+                self?.startReceiving() // Start receiving messages from server
             case .failed, .cancelled:
                 print("Connection lost.")
                 self?.connection = nil
@@ -190,6 +216,62 @@ class KVMController: ObservableObject {
             }
         }
         connection?.start(queue: .main)
+    }
+    
+    // MARK: - Receive from Server
+    
+    private var receiveBuffer = Data()
+    private static let newline = Data([0x0A])
+    
+    private func startReceiving() {
+        receiveData()
+    }
+    
+    private func receiveData() {
+        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self else { return }
+            
+            if let data = data, !data.isEmpty {
+                self.processReceivedData(data)
+                self.receiveData() // Continue receiving
+            }
+            
+            if isComplete || error != nil {
+                print("Connection receive ended")
+            }
+        }
+    }
+    
+    private func processReceivedData(_ data: Data) {
+        receiveBuffer.append(data)
+        while let range = receiveBuffer.range(of: Self.newline) {
+            let messageData = receiveBuffer.subdata(in: 0..<range.lowerBound)
+            receiveBuffer.removeSubrange(0..<range.upperBound)
+            if !messageData.isEmpty {
+                handleServerMessage(messageData)
+            }
+        }
+    }
+    
+    private func handleServerMessage(_ data: Data) {
+        guard let event = try? JSONDecoder().decode(RemoteInputEvent.self, from: data) else {
+            print("Failed to decode server message")
+            return
+        }
+        
+        switch event {
+        case .screenInfo(let info):
+            serverScreenSize = CGSize(width: info.width, height: info.height)
+            print("Received server screen size: \(serverScreenSize)")
+            
+        case .controlRelease:
+            print("Server requested control release (right edge hit)")
+            DispatchQueue.main.async { self.isControllingRemote = false }
+            
+        case .keyboard, .mouse, .warpCursor:
+            // These are client-to-server events, ignore
+            break
+        }
     }
 
     func send(event: RemoteInputEvent) {
@@ -363,7 +445,7 @@ class KVMController: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
         
-        // Toggle combo: Ctrl+Shift+Escape
+        // Toggle combo: Ctrl+Shift+Escape (fallback, works both ways)
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
         let isEscapeDown = (type == .keyDown && keyCode == toggleKeyCode)
@@ -379,15 +461,35 @@ class KVMController: ObservableObject {
             
             print("Toggle combo detected! Switching control.")
             fflush(stdout)
-            DispatchQueue.main.async { self.isControllingRemote.toggle() }
+            DispatchQueue.main.async { 
+                if !self.isControllingRemote {
+                    self.enterRemoteControl()
+                } else {
+                    self.isControllingRemote = false
+                }
+            }
             return nil // Consume the event
         }
         
-        // If we're not controlling remote, pass the event through unmodified
-        guard isControllingRemote else {
+        // Left edge detection: enter remote control when cursor hits left edge
+        if !isControllingRemote {
+            let isMouseMoveEvent = [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
+            if isMouseMoveEvent {
+                let location = event.location
+                let deltaX = event.getIntegerValueField(.mouseEventDeltaX)
+                
+                // Cursor at left edge (x <= 0) and trying to move further left (deltaX < 0)
+                if location.x <= 0 && deltaX < 0 && connection?.state == .ready {
+                    print("Left edge detected! Entering remote control.")
+                    fflush(stdout)
+                    DispatchQueue.main.async { self.enterRemoteControl() }
+                    return nil // Consume the event
+                }
+            }
             return Unmanaged.passUnretained(event)
         }
         
+        // If we're controlling remote, forward events
         // Determine if this is a keyboard or mouse event and send accordingly
         let isMouseEvent = [
             CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged,

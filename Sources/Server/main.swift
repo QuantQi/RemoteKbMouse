@@ -112,9 +112,36 @@ class ServerConnection {
             // The connection has been cancelled, so stop processing
             self.stop(error: nil)
         case .ready:
-             print("Connection ready.")
+            print("Connection ready.")
+            // Send screen info to client on connect
+            sendScreenInfo()
         default:
             break
+        }
+    }
+    
+    private func sendScreenInfo() {
+        let screenSize = getMainScreenSize()
+        let screenInfo = ScreenInfoEvent(width: Double(screenSize.width), height: Double(screenSize.height))
+        let event = RemoteInputEvent.screenInfo(screenInfo)
+        send(event: event)
+        print("Sent screen info: \(screenSize.width)x\(screenSize.height)")
+    }
+    
+    private func sendControlRelease() {
+        let event = RemoteInputEvent.controlRelease
+        send(event: event)
+        print("Sent control release (right edge hit)")
+    }
+    
+    private func send(event: RemoteInputEvent) {
+        guard nwConnection.state == .ready else { return }
+        do {
+            let data = try JSONEncoder().encode(event)
+            let framedData = data + ServerConnection.newline
+            nwConnection.send(content: framedData, completion: .idempotent)
+        } catch {
+            print("Failed to encode event: \(error)")
         }
     }
     
@@ -159,7 +186,6 @@ class ServerConnection {
             
             switch inputEvent {
             case .keyboard(let keyboardEvent):
-                //print("Received keyboard event: keyCode=\(keyboardEvent.keyCode)")
                 if let cgEvent = keyboardEvent.toCGEvent() {
                     cgEvent.post(tap: .cgSessionEventTap)
                 } else {
@@ -167,18 +193,26 @@ class ServerConnection {
                 }
                 
             case .mouse(let mouseEvent):
-                // Get screen size for coordinate conversion
                 let screenSize = getMainScreenSize()
                 
                 if let cgEvent = mouseEvent.toCGEvent(screenSize: screenSize) {
                     cgEvent.post(tap: .cgSessionEventTap)
-                    // Only log non-move events to reduce spam
-                    if mouseEvent.eventType != .moved {
-                       // print("Posted mouse event: \(mouseEvent.eventType)")
-                    }
+                    
+                    // Check for right edge hit after posting the event
+                    checkRightEdge(screenSize: screenSize)
                 } else {
                     print("Failed to convert mouse event to CGEvent")
                 }
+                
+            case .warpCursor(let warpEvent):
+                // Warp cursor to specified position
+                let point = CGPoint(x: warpEvent.x, y: warpEvent.y)
+                CGWarpMouseCursorPosition(point)
+                print("Warped cursor to \(point)")
+                
+            case .screenInfo, .controlRelease:
+                // These are server-to-client events, ignore if received
+                break
             }
         } catch {
             print("Failed to decode RemoteInputEvent: \(error)")
@@ -186,8 +220,17 @@ class ServerConnection {
         }
     }
     
+    private func checkRightEdge(screenSize: CGSize) {
+        // Get current cursor position
+        guard let currentPos = CGEvent(source: nil)?.location else { return }
+        
+        // Check if cursor hit right edge
+        if currentPos.x >= screenSize.width - 1 {
+            sendControlRelease()
+        }
+    }
+    
     private func getMainScreenSize() -> CGSize {
-        // Get the main display's size
         let mainDisplayID = CGMainDisplayID()
         let width = CGDisplayPixelsWide(mainDisplayID)
         let height = CGDisplayPixelsHigh(mainDisplayID)
