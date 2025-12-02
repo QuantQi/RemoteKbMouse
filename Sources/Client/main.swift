@@ -280,17 +280,26 @@ class KVMController: ObservableObject {
     private func processReceivedData(_ data: Data) {
         receiveBuffer.append(data)
         
-        // Try to process video frames first (binary format)
-        while processVideoFrame() {
-            // Keep processing while we have complete frames
-        }
-        
-        // Then check for JSON messages (newline delimited)
-        while let range = receiveBuffer.range(of: Self.newline) {
-            let messageData = receiveBuffer.subdata(in: 0..<range.lowerBound)
-            receiveBuffer.removeSubrange(0..<range.upperBound)
-            if !messageData.isEmpty {
-                handleServerMessage(messageData)
+        // Process messages - need to distinguish JSON from binary video frames
+        // JSON messages start with '{' and end with '\n'
+        // Video frames have a 9-byte header starting with binary size data
+        while !receiveBuffer.isEmpty {
+            // Check first byte to determine message type
+            let firstByte = receiveBuffer[0]
+            
+            if firstByte == 0x7B { // '{' - JSON message
+                // Find the newline
+                guard let range = receiveBuffer.range(of: Self.newline) else { break }
+                let messageData = receiveBuffer.subdata(in: 0..<range.lowerBound)
+                receiveBuffer.removeSubrange(0..<range.upperBound)
+                if !messageData.isEmpty {
+                    handleServerMessage(messageData)
+                }
+            } else {
+                // Binary video frame
+                if !processVideoFrame() {
+                    break // Need more data
+                }
             }
         }
     }
