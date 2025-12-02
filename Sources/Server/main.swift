@@ -102,10 +102,21 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         print("Screen capture stopped")
     }
     
+    private var capturedFrameCount: UInt64 = 0
+    
     // SCStreamOutput
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen else { return }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            print("[CAPTURE] ERROR: No pixel buffer in sample buffer")
+            return
+        }
+        capturedFrameCount += 1
+        if capturedFrameCount <= 3 || capturedFrameCount % 120 == 0 {
+            let w = CVPixelBufferGetWidth(pixelBuffer)
+            let h = CVPixelBufferGetHeight(pixelBuffer)
+            print("[CAPTURE] Frame #\(capturedFrameCount): \(w)x\(h)")
+        }
         encoder?.encode(pixelBuffer: pixelBuffer)
     }
     
@@ -297,7 +308,10 @@ class ServerConnection {
     }
     
     private func sendVideoFrame(data: Data, isKeyframe: Bool) {
-        guard nwConnection.state == .ready else { return }
+        guard nwConnection.state == .ready else {
+            print("[SEND] ERROR: Connection not ready, state=\(nwConnection.state)")
+            return
+        }
         
         let timestamp = UInt32((CACurrentMediaTime() - startTime) * 1000)
         let header = VideoFrameHeader(frameSize: UInt32(data.count), timestamp: timestamp, isKeyframe: isKeyframe)
@@ -305,12 +319,20 @@ class ServerConnection {
         var frameData = header.toData()
         frameData.append(data)
         
-        nwConnection.send(content: frameData, completion: .idempotent)
         frameCount += 1
         
-        if frameCount % 60 == 0 {
-            print("Sent \(frameCount) frames, last size: \(data.count) bytes, keyframe: \(isKeyframe)")
+        if frameCount <= 5 || frameCount % 60 == 0 || isKeyframe {
+            print("[SEND] Frame #\(frameCount): \(frameData.count) bytes (header=\(VideoFrameHeader.headerSize), payload=\(data.count)), keyframe=\(isKeyframe)")
+            // Log header bytes
+            let headerBytes = frameData.prefix(VideoFrameHeader.headerSize).map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("[SEND] Header bytes: \(headerBytes)")
         }
+        
+        nwConnection.send(content: frameData, completion: .contentProcessed { error in
+            if let error = error {
+                print("[SEND] ERROR sending frame: \(error)")
+            }
+        })
     }
     
     private func sendScreenInfo() {

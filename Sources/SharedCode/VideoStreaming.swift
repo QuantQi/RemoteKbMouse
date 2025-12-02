@@ -129,10 +129,19 @@ public class H264Encoder {
     }
     
     public func encode(pixelBuffer: CVPixelBuffer) {
-        guard let session = compressionSession else { return }
+        guard let session = compressionSession else {
+            print("[ENCODER] ERROR: No compression session!")
+            return
+        }
         
         let presentationTime = CMTime(value: frameCount, timescale: CMTimeScale(fps))
         frameCount += 1
+        
+        if frameCount <= 3 || frameCount % 120 == 0 {
+            let w = CVPixelBufferGetWidth(pixelBuffer)
+            let h = CVPixelBufferGetHeight(pixelBuffer)
+            print("[ENCODER] Encoding frame #\(frameCount): \(w)x\(h)")
+        }
         
         var flags: VTEncodeInfoFlags = []
         
@@ -144,12 +153,19 @@ public class H264Encoder {
             frameProperties: nil,
             infoFlagsOut: &flags
         ) { [weak self] status, infoFlags, sampleBuffer in
-            guard status == noErr, let sampleBuffer = sampleBuffer else { return }
+            if status != noErr {
+                print("[ENCODER] Encode callback error: \(status)")
+                return
+            }
+            guard let sampleBuffer = sampleBuffer else {
+                print("[ENCODER] ERROR: No sample buffer in callback")
+                return
+            }
             self?.processSampleBuffer(sampleBuffer)
         }
         
         if status != noErr {
-            print("Encode error: \(status)")
+            print("[ENCODER] VTCompressionSessionEncodeFrame error: \(status)")
         }
     }
     
@@ -243,6 +259,15 @@ public class H264Encoder {
             offset += 4 + Int(nalLength)
         }
         
+        if frameCount <= 3 || frameCount % 120 == 0 || isKeyframe {
+            let codecName = (activeCodec == .hevc) ? "HEVC" : "H.264"
+            print("[ENCODER] Output frame #\(frameCount): \(nalData.count) bytes, keyframe=\(isKeyframe), codec=\(codecName)")
+            // Log first few bytes to verify NAL structure
+            if nalData.count >= 8 {
+                let bytes = nalData.prefix(8).map { String(format: "%02X", $0) }.joined(separator: " ")
+                print("[ENCODER] NAL start bytes: \(bytes)")
+            }
+        }
         onEncodedFrame?(nalData, isKeyframe)
     }
     
@@ -274,7 +299,12 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
         }
     }
     
+    private var decodeCallCount: UInt64 = 0
+    
     public func decode(nalData: Data) {
+        decodeCallCount += 1
+        print("[DECODER] decode() called #\(decodeCallCount), input size=\(nalData.count) bytes")
+        
         // Parse NAL units with Annex B start codes (0x00 0x00 0x00 0x01)
         // Store raw first byte for codec-specific parsing later
         var nalUnits: [(firstByte: UInt8, data: Data)] = []
@@ -303,6 +333,11 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
                     let firstByte = nalData[nalStart]
                     let nalDataSlice = nalData.subdata(in: nalStart..<nalEnd)
                     nalUnits.append((firstByte, nalDataSlice))
+                    
+                    // Debug: log NAL unit found
+                    let h264Type = firstByte & 0x1F
+                    let hevcType = (firstByte >> 1) & 0x3F
+                    print("[DECODER] Found NAL: firstByte=0x\(String(format: "%02X", firstByte)), h264Type=\(h264Type), hevcType=\(hevcType), size=\(nalDataSlice.count)")
                 }
                 
                 i = nalEnd
@@ -310,6 +345,8 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
                 i += 1
             }
         }
+        
+        print("[DECODER] Found \(nalUnits.count) NAL units, current codec=\(detectedCodec.map { $0 == .hevc ? "HEVC" : "H.264" } ?? "unknown")")
         
         // Process NAL units
         // NAL type extraction differs by codec:
@@ -583,13 +620,21 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
         print("\(codecName) Decoder initialized")
     }
     
+    private var decodedFrameCount: UInt64 = 0
+    
     private func decodeVideoNAL(_ nalData: Data, isIDR: Bool) {
-        guard let session = decompressionSession, let formatDesc = formatDescription else { 
-            if isIDR {
-                print("Decoder: Cannot decode IDR - no session")
-            }
+        print("[DECODER] decodeVideoNAL called: size=\(nalData.count), isIDR=\(isIDR)")
+        
+        guard let session = decompressionSession else {
+            print("[DECODER] ERROR: No decompression session!")
+            return
+        }
+        guard let formatDesc = formatDescription else { 
+            print("[DECODER] ERROR: No format description!")
             return 
         }
+        
+        print("[DECODER] Session and format OK, proceeding to decode...")
         
         // Convert to AVCC format (length-prefixed)
         var length = UInt32(nalData.count).bigEndian
@@ -648,24 +693,42 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
         let flags: VTDecodeFrameFlags = []  // Synchronous decode
         var infoFlags: VTDecodeInfoFlags = []
         
+        print("[DECODER] Calling VTDecompressionSessionDecodeFrame...")
+        
         let decodeStatus = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: flags, infoFlagsOut: &infoFlags) { [weak self] status, flags, imageBuffer, pts, duration in
+            guard let self = self else {
+                print("[DECODER] Callback: self is nil!")
+                return
+            }
+            self.decodedFrameCount += 1
+            
             if status != noErr {
-                print("Decoder: Frame decode callback error: \(status)")
+                print("[DECODER] Callback ERROR: status=\(status)")
                 return
             }
             guard let pixelBuffer = imageBuffer else { 
-                print("Decoder: No pixel buffer in callback")
+                print("[DECODER] Callback ERROR: No pixel buffer")
                 return 
             }
-            // Debug: log successful decode
+            
             let w = CVPixelBufferGetWidth(pixelBuffer)
             let h = CVPixelBufferGetHeight(pixelBuffer)
-            print("Decoder: Decoded frame \(w)x\(h)")
-            self?.onDecodedFrame?(pixelBuffer, pts)
+            let hasIOSurface = CVPixelBufferGetIOSurface(pixelBuffer) != nil
+            print("[DECODER] SUCCESS! Frame #\(self.decodedFrameCount): \(w)x\(h), IOSurface=\(hasIOSurface)")
+            
+            if self.onDecodedFrame != nil {
+                print("[DECODER] Calling onDecodedFrame callback...")
+                self.onDecodedFrame?(pixelBuffer, pts)
+                print("[DECODER] onDecodedFrame callback returned")
+            } else {
+                print("[DECODER] ERROR: onDecodedFrame is nil!")
+            }
         }
         
         if decodeStatus != noErr {
-            print("Decoder: VTDecompressionSessionDecodeFrame error: \(decodeStatus)")
+            print("[DECODER] VTDecompressionSessionDecodeFrame returned error: \(decodeStatus)")
+        } else {
+            print("[DECODER] VTDecompressionSessionDecodeFrame returned success")
         }
     }
 }

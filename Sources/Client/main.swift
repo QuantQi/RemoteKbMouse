@@ -131,28 +131,36 @@ class KVMController: ObservableObject {
         print("Video decoder initialized")
     }
     
+    private var displayedFrameCount: UInt64 = 0
+    
     private func handleDecodedFrame(_ pixelBuffer: CVPixelBuffer) {
+        displayedFrameCount += 1
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         
+        print("[DISPLAY] handleDecodedFrame #\(displayedFrameCount): \(width)x\(height)")
+        
         // Get IOSurface for zero-copy GPU display (decoder is configured to output IOSurface-backed buffers)
-        guard let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() else {
-            // This should never happen if decoder is configured correctly
-            print("Error: CVPixelBuffer is not IOSurface-backed! This causes GPU->CPU->GPU copy.")
+        guard let surfaceRef = CVPixelBufferGetIOSurface(pixelBuffer) else {
+            print("[DISPLAY] ERROR: CVPixelBufferGetIOSurface returned nil!")
             return
         }
+        let surface = surfaceRef.takeUnretainedValue()
+        print("[DISPLAY] Got IOSurface: \(surface)")
         
         // Display directly on GPU - no CPU copy!
         // CALayer.contents accepts IOSurface and composites it directly on GPU
         DispatchQueue.main.async {
+            print("[DISPLAY] Main thread: setting videoLayer.contents...")
+            print("[DISPLAY] videoLayer frame: \(self.videoLayer.frame), bounds: \(self.videoLayer.bounds)")
+            print("[DISPLAY] videoLayer superlayer: \(String(describing: self.videoLayer.superlayer))")
+            
             CATransaction.begin()
             CATransaction.setDisableActions(true)  // No animation
             self.videoLayer.contents = surface
             CATransaction.commit()
             
-            if self.videoFrameCount % 60 == 1 {
-                print("Displaying frame \(self.videoFrameCount): \(width)x\(height) (GPU zero-copy)")
-            }
+            print("[DISPLAY] Frame #\(self.displayedFrameCount) displayed: \(width)x\(height)")
         }
     }
     
@@ -308,17 +316,26 @@ class KVMController: ObservableObject {
         receiveData()
     }
     
+    private var totalBytesReceived: UInt64 = 0
+    
     private func receiveData() {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self = self else { return }
             
             if let data = data, !data.isEmpty {
+                self.totalBytesReceived += UInt64(data.count)
+                if self.totalBytesReceived <= 10000 || self.videoFrameCount % 60 == 0 {
+                    print("[RECV] Got \(data.count) bytes, total=\(self.totalBytesReceived), buffer=\(self.receiveBuffer.count)")
+                }
                 self.processReceivedData(data)
                 self.receiveData() // Continue receiving
             }
             
-            if isComplete || error != nil {
-                print("Connection receive ended")
+            if isComplete {
+                print("[RECV] Connection complete")
+            }
+            if let error = error {
+                print("[RECV] Connection error: \(error)")
             }
         }
     }
@@ -390,8 +407,15 @@ class KVMController: ObservableObject {
         
         videoFrameCount += 1
         let isKeyframe = frameHeader?.isKeyframe ?? false
-        if videoFrameCount <= 5 || videoFrameCount % 60 == 0 || isKeyframe {
-            print("Received video frame #\(videoFrameCount): \(frameData.count) bytes, keyframe: \(isKeyframe)")
+        
+        // Always log first 10 frames, then every 60th, plus all keyframes
+        if videoFrameCount <= 10 || videoFrameCount % 60 == 0 || isKeyframe {
+            print("[FRAME] #\(videoFrameCount): \(frameData.count) bytes, keyframe=\(isKeyframe)")
+            // Log first few bytes to see NAL structure
+            if frameData.count >= 12 {
+                let bytes = frameData.prefix(12).map { String(format: "%02X", $0) }.joined(separator: " ")
+                print("[FRAME] First 12 bytes: \(bytes)")
+            }
         }
         
         // Clear error on successful frame
@@ -401,7 +425,11 @@ class KVMController: ObservableObject {
         
         // Decode the frame
         if videoSourceMode == .networkStream {
+            print("[FRAME] Sending \(frameData.count) bytes to decoder...")
             decoder?.decode(nalData: frameData)
+            print("[FRAME] Decoder returned")
+        } else {
+            print("[FRAME] WARNING: Not in networkStream mode!")
         }
         
         // Reset for next frame
