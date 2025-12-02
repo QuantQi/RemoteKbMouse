@@ -276,7 +276,8 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
     
     public func decode(nalData: Data) {
         // Parse NAL units with Annex B start codes (0x00 0x00 0x00 0x01)
-        var nalUnits: [(type: UInt8, data: Data)] = []
+        // Store raw first byte for codec-specific parsing later
+        var nalUnits: [(firstByte: UInt8, data: Data)] = []
         var i = 0
         
         while i < nalData.count {
@@ -298,10 +299,10 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
                 }
                 
                 if nalStart < nalEnd {
-                    // HEVC NAL type is in bits 1-6 of first byte (shifted right by 1)
-                    let nalType = (nalData[nalStart] >> 1) & 0x3F
+                    // Store raw first byte - we'll parse NAL type based on detected codec
+                    let firstByte = nalData[nalStart]
                     let nalDataSlice = nalData.subdata(in: nalStart..<nalEnd)
-                    nalUnits.append((nalType, nalDataSlice))
+                    nalUnits.append((firstByte, nalDataSlice))
                 }
                 
                 i = nalEnd
@@ -310,76 +311,134 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
             }
         }
         
-        // Process NAL units - auto-detect HEVC vs H.264 from NAL types
+        // Process NAL units
+        // NAL type extraction differs by codec:
+        //   H.264: type = firstByte & 0x1F (bits 0-4)
+        //   HEVC:  type = (firstByte >> 1) & 0x3F (bits 1-6)
+        //
+        // Auto-detect codec from characteristic NAL types:
+        //   H.264 SPS has firstByte & 0x1F == 7, so firstByte is 0x67 or 0x27
+        //   HEVC VPS has (firstByte >> 1) & 0x3F == 32, so firstByte is 0x40 or 0x41
+        
         for nal in nalUnits {
-            // HEVC NAL types are 0-63, H.264 NAL types are 0-31
-            // HEVC VPS=32, SPS=33, PPS=34 are unique to HEVC
-            // H.264 SPS=7, PPS=8, IDR=5
+            let firstByte = nal.firstByte
             
-            switch nal.type {
-            // HEVC parameter sets
-            case 32:  // VPS (HEVC only)
-                detectedCodec = .hevc
-                if vpsData != nal.data {
-                    print("Decoder: Received HEVC VPS (\(nal.data.count) bytes)")
-                    vpsData = nal.data
-                    invalidateSession()
+            // Extract NAL type for both codecs
+            let h264Type = firstByte & 0x1F           // H.264: bits 0-4
+            let hevcType = (firstByte >> 1) & 0x3F    // HEVC: bits 1-6
+            
+            // Auto-detect codec from parameter set NALs
+            // HEVC VPS (type 32) has firstByte 0x40-0x41
+            // H.264 SPS (type 7) has firstByte 0x67, 0x27, etc.
+            if detectedCodec == nil {
+                if hevcType == 32 {  // HEVC VPS
+                    detectedCodec = .hevc
+                    print("Decoder: Auto-detected HEVC codec")
+                } else if h264Type == 7 {  // H.264 SPS
+                    detectedCodec = .h264
+                    print("Decoder: Auto-detected H.264 codec")
                 }
-            case 33:  // SPS (HEVC)
-                detectedCodec = .hevc
-                if spsData != nal.data {
-                    print("Decoder: Received HEVC SPS (\(nal.data.count) bytes)")
-                    spsData = nal.data
-                }
-            case 34:  // PPS (HEVC)
-                detectedCodec = .hevc
-                if ppsData != nal.data {
-                    print("Decoder: Received HEVC PPS (\(nal.data.count) bytes)")
-                    ppsData = nal.data
-                }
-                tryCreateDecompressionSession()
-                
-            // H.264 parameter sets
-            case 7:  // SPS (H.264)
-                detectedCodec = .h264
-                if spsData != nal.data {
-                    print("Decoder: Received H.264 SPS (\(nal.data.count) bytes)")
-                    spsData = nal.data
-                    invalidateSession()
-                }
-            case 8:  // PPS (H.264)
-                detectedCodec = .h264
-                if ppsData != nal.data {
-                    print("Decoder: Received H.264 PPS (\(nal.data.count) bytes)")
-                    ppsData = nal.data
-                }
-                tryCreateDecompressionSession()
-                
-            // HEVC slice types
-            case 19, 20:  // IDR_W_RADL, IDR_N_LP (HEVC keyframes)
-                tryCreateDecompressionSession()
-                decodeVideoNAL(nal.data, isIDR: true)
-            case 21:  // CRA_NUT (HEVC clean random access - also a keyframe type)
-                tryCreateDecompressionSession()
-                decodeVideoNAL(nal.data, isIDR: true)
-            case 0, 1:  // TRAIL_N, TRAIL_R (HEVC non-IDR)
-                decodeVideoNAL(nal.data, isIDR: false)
-            case 2...9:  // TSA, STSA, RADL, RASL (HEVC slice types)
-                decodeVideoNAL(nal.data, isIDR: false)
-                
-            // H.264 slice types
-            case 5:  // IDR (H.264 keyframe) - only if we detected H.264
-                if detectedCodec == .h264 {
-                    tryCreateDecompressionSession()
-                    decodeVideoNAL(nal.data, isIDR: true)
-                }
-            case 1 where detectedCodec == .h264:  // Non-IDR slice (H.264)
-                decodeVideoNAL(nal.data, isIDR: false)
-                
-            default:
-                // SEI, AUD, etc. - ignore
-                break
             }
+            
+            // Use detected codec to determine NAL type, default to trying both
+            let codec = detectedCodec
+            
+            // === HEVC NAL types ===
+            if codec == .hevc || codec == nil {
+                switch hevcType {
+                case 32:  // VPS (HEVC only)
+                    detectedCodec = .hevc
+                    if vpsData != nal.data {
+                        print("Decoder: Received HEVC VPS (\(nal.data.count) bytes)")
+                        vpsData = nal.data
+                        invalidateSession()
+                    }
+                    continue
+                case 33:  // SPS (HEVC)
+                    if codec == .hevc {
+                        if spsData != nal.data {
+                            print("Decoder: Received HEVC SPS (\(nal.data.count) bytes)")
+                            spsData = nal.data
+                        }
+                        continue
+                    }
+                case 34:  // PPS (HEVC)
+                    if codec == .hevc {
+                        if ppsData != nal.data {
+                            print("Decoder: Received HEVC PPS (\(nal.data.count) bytes)")
+                            ppsData = nal.data
+                        }
+                        tryCreateDecompressionSession()
+                        continue
+                    }
+                case 19, 20:  // IDR_W_RADL, IDR_N_LP (HEVC keyframes)
+                    if codec == .hevc {
+                        tryCreateDecompressionSession()
+                        decodeVideoNAL(nal.data, isIDR: true)
+                        continue
+                    }
+                case 21:  // CRA_NUT (HEVC clean random access)
+                    if codec == .hevc {
+                        tryCreateDecompressionSession()
+                        decodeVideoNAL(nal.data, isIDR: true)
+                        continue
+                    }
+                case 0, 1:  // TRAIL_N, TRAIL_R (HEVC non-IDR)
+                    if codec == .hevc {
+                        decodeVideoNAL(nal.data, isIDR: false)
+                        continue
+                    }
+                case 2...9:  // TSA, STSA, RADL, RASL (HEVC slice types)
+                    if codec == .hevc {
+                        decodeVideoNAL(nal.data, isIDR: false)
+                        continue
+                    }
+                default:
+                    break
+                }
+            }
+            
+            // === H.264 NAL types ===
+            if codec == .h264 || codec == nil {
+                switch h264Type {
+                case 7:  // SPS (H.264)
+                    detectedCodec = .h264
+                    if spsData != nal.data {
+                        print("Decoder: Received H.264 SPS (\(nal.data.count) bytes)")
+                        spsData = nal.data
+                        invalidateSession()
+                    }
+                    continue
+                case 8:  // PPS (H.264)
+                    if codec == .h264 {
+                        if ppsData != nal.data {
+                            print("Decoder: Received H.264 PPS (\(nal.data.count) bytes)")
+                            ppsData = nal.data
+                        }
+                        tryCreateDecompressionSession()
+                        continue
+                    }
+                case 5:  // IDR (H.264 keyframe)
+                    if codec == .h264 {
+                        tryCreateDecompressionSession()
+                        decodeVideoNAL(nal.data, isIDR: true)
+                        continue
+                    }
+                case 1:  // Non-IDR slice (H.264)
+                    if codec == .h264 {
+                        decodeVideoNAL(nal.data, isIDR: false)
+                        continue
+                    }
+                case 6:  // SEI (H.264)
+                    continue  // Ignore SEI
+                case 9:  // AUD (H.264)
+                    continue  // Ignore Access Unit Delimiter
+                default:
+                    break
+                }
+            }
+            
+            // Unknown NAL type - ignore silently
         }
     }
     
