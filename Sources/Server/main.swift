@@ -103,19 +103,86 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
     }
     
     private var capturedFrameCount: UInt64 = 0
+    private var noPixelBufferCount: UInt64 = 0
     
     // SCStreamOutput
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen else { return }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            print("[CAPTURE] ERROR: No pixel buffer in sample buffer")
+        guard type == .screen else { 
+            print("[CAPTURE] Ignoring non-screen sample buffer, type=\(type)")
+            return 
+        }
+        
+        // Check sample buffer validity
+        let isValid = CMSampleBufferIsValid(sampleBuffer)
+        let dataIsReady = CMSampleBufferDataIsReady(sampleBuffer)
+        
+        if !isValid || !dataIsReady {
+            print("[CAPTURE] Sample buffer not ready: valid=\(isValid), dataReady=\(dataIsReady)")
             return
         }
+        
+        // Check for status attachments that indicate why there's no frame
+        if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
+           let attachments = attachmentsArray.first {
+            
+            // SCStreamFrameInfo.status key
+            let statusKey = SCStreamFrameInfo.status.rawValue as CFString
+            if let statusRawValue = attachments[statusKey] as? Int {
+                let status = SCFrameStatus(rawValue: statusRawValue)
+                switch status {
+                case .complete:
+                    break // Good, continue processing
+                case .idle:
+                    // No new frame, screen unchanged - this is normal, don't spam logs
+                    return
+                case .blank:
+                    if noPixelBufferCount % 60 == 0 {
+                        print("[CAPTURE] Blank frame (screen may be locked or display off)")
+                    }
+                    noPixelBufferCount += 1
+                    return
+                case .suspended:
+                    print("[CAPTURE] Capture suspended")
+                    return
+                case .started:
+                    print("[CAPTURE] Stream started notification")
+                    return
+                case .stopped:
+                    print("[CAPTURE] Stream stopped notification")
+                    return
+                default:
+                    print("[CAPTURE] Unknown frame status: \(statusRawValue)")
+                    // Don't return - try to get pixel buffer anyway
+                }
+            }
+        }
+        
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            noPixelBufferCount += 1
+            if noPixelBufferCount <= 10 || noPixelBufferCount % 100 == 0 {
+                print("[CAPTURE] WARNING: No pixel buffer in sample buffer #\(noPixelBufferCount)")
+                // Debug: print what's in the sample buffer
+                if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                    let mediaType = CMFormatDescriptionGetMediaType(formatDesc)
+                    let mediaSubType = CMFormatDescriptionGetMediaSubType(formatDesc)
+                    print("[CAPTURE] Format: mediaType=\(mediaType), subType=\(mediaSubType)")
+                } else {
+                    print("[CAPTURE] No format description")
+                }
+                // Print attachment keys for debugging
+                if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
+                   let attachments = attachmentsArray.first {
+                    print("[CAPTURE] Attachment keys: \(attachments.keys)")
+                }
+            }
+            return
+        }
+        
         capturedFrameCount += 1
-        if capturedFrameCount <= 3 || capturedFrameCount % 120 == 0 {
+        if capturedFrameCount <= 5 || capturedFrameCount % 120 == 0 {
             let w = CVPixelBufferGetWidth(pixelBuffer)
             let h = CVPixelBufferGetHeight(pixelBuffer)
-            print("[CAPTURE] Frame #\(capturedFrameCount): \(w)x\(h)")
+            print("[CAPTURE] ✓ Frame #\(capturedFrameCount): \(w)x\(h)")
         }
         encoder?.encode(pixelBuffer: pixelBuffer)
     }
@@ -155,16 +222,32 @@ class Server {
 
     func start() {
         print("Server starting...")
+        print("Process: \(ProcessInfo.processInfo.processName)")
+        print("PID: \(ProcessInfo.processInfo.processIdentifier)")
         
         // Check for screen recording permission (required for ScreenCaptureKit)
-        if !CGPreflightScreenCaptureAccess() {
-            print("\n--- SCREEN RECORDING PERMISSION REQUIRED ---")
+        let hasScreenRecording = CGPreflightScreenCaptureAccess()
+        print("\n--- SCREEN RECORDING PERMISSION CHECK ---")
+        print("CGPreflightScreenCaptureAccess() = \(hasScreenRecording)")
+        
+        if !hasScreenRecording {
             print("Requesting screen recording permission...")
             let granted = CGRequestScreenCaptureAccess()
+            print("CGRequestScreenCaptureAccess() = \(granted)")
+            
             if !granted {
-                print("⚠️  Screen Recording permission is required to stream the screen.")
-                print("Please go to System Settings > Privacy & Security > Screen Recording")
-                print("and enable it for 'Server', then restart the server.")
+                print("")
+                print("⚠️  Screen Recording permission is REQUIRED to stream the screen.")
+                print("")
+                print("Since you're running from Terminal, you need to grant permission to TERMINAL:")
+                print("  1. Open System Settings > Privacy & Security > Screen Recording")
+                print("  2. Find 'Terminal' (or your terminal app: iTerm, Warp, etc.)")
+                print("  3. Toggle it ON")
+                print("  4. RESTART Terminal completely (Cmd+Q, then reopen)")
+                print("  5. Run the server again")
+                print("")
+                print("If Terminal is not listed, this request should have added it.")
+                print("Check System Settings now and look for Terminal.")
                 print("---------------------------------------------\n")
             } else {
                 print("✓ Screen Recording permission granted.")
@@ -172,6 +255,7 @@ class Server {
         } else {
             print("✓ Screen Recording permission already granted.")
         }
+        print("-----------------------------------------\n")
         
         // Check for accessibility permissions (required for keyboard events)
         if !hasAccessibilityPermission {
