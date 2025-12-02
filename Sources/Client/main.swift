@@ -445,31 +445,32 @@ class KVMController: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
         
+        // TEMPORARILY DISABLED for edge detection testing
         // Toggle combo: Ctrl+Shift+Escape (fallback, works both ways)
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        let flags = event.flags
-        let isEscapeDown = (type == .keyDown && keyCode == toggleKeyCode)
-        let hasCtrlShift = flags.contains(.maskControl) && flags.contains(.maskShift)
-        
-        if isEscapeDown && hasCtrlShift {
-            // Check connection before entering remote control
-            if !isControllingRemote && connection?.state != .ready {
-                print("Cannot enter remote control: No server connection.")
-                fflush(stdout)
-                return Unmanaged.passUnretained(event)
-            }
-            
-            print("Toggle combo detected! Switching control.")
-            fflush(stdout)
-            DispatchQueue.main.async { 
-                if !self.isControllingRemote {
-                    self.enterRemoteControl()
-                } else {
-                    self.isControllingRemote = false
-                }
-            }
-            return nil // Consume the event
-        }
+        // let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        // let flags = event.flags
+        // let isEscapeDown = (type == .keyDown && keyCode == toggleKeyCode)
+        // let hasCtrlShift = flags.contains(.maskControl) && flags.contains(.maskShift)
+        // 
+        // if isEscapeDown && hasCtrlShift {
+        //     // Check connection before entering remote control
+        //     if !isControllingRemote && connection?.state != .ready {
+        //         print("Cannot enter remote control: No server connection.")
+        //         fflush(stdout)
+        //         return Unmanaged.passUnretained(event)
+        //     }
+        //     
+        //     print("Toggle combo detected! Switching control.")
+        //     fflush(stdout)
+        //     DispatchQueue.main.async { 
+        //         if !self.isControllingRemote {
+        //             self.enterRemoteControl()
+        //         } else {
+        //             self.isControllingRemote = false
+        //         }
+        //     }
+        //     return nil // Consume the event
+        // }
         
         // Left edge detection: enter remote control when cursor hits left edge
         if !isControllingRemote {
