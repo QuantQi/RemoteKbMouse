@@ -298,30 +298,45 @@ public class H264Decoder {
         guard let session = decompressionSession, let formatDesc = formatDescription else { return }
         
         // Convert to AVCC format (length-prefixed)
-        var lengthPrefixedData = Data()
         var length = UInt32(nalData.count).bigEndian
-        lengthPrefixedData.append(Data(bytes: &length, count: 4))
+        var lengthPrefixedData = Data(bytes: &length, count: 4)
         lengthPrefixedData.append(nalData)
         
+        // Create block buffer with a copy of the data (not a reference)
         var blockBuffer: CMBlockBuffer?
-        lengthPrefixedData.withUnsafeBytes { pointer in
-            CMBlockBufferCreateWithMemoryBlock(
+        let dataCount = lengthPrefixedData.count
+        
+        let status = lengthPrefixedData.withUnsafeBytes { pointer -> OSStatus in
+            // First create an empty block buffer
+            var status = CMBlockBufferCreateWithMemoryBlock(
                 allocator: kCFAllocatorDefault,
-                memoryBlock: UnsafeMutableRawPointer(mutating: pointer.baseAddress!),
-                blockLength: lengthPrefixedData.count,
-                blockAllocator: kCFAllocatorNull,
+                memoryBlock: nil,  // Let it allocate
+                blockLength: dataCount,
+                blockAllocator: kCFAllocatorDefault,
                 customBlockSource: nil,
                 offsetToData: 0,
-                dataLength: lengthPrefixedData.count,
+                dataLength: dataCount,
                 flags: 0,
                 blockBufferOut: &blockBuffer
             )
+            
+            guard status == noErr, let buffer = blockBuffer else { return status }
+            
+            // Copy data into the block buffer
+            status = CMBlockBufferReplaceDataBytes(
+                with: pointer.baseAddress!,
+                blockBuffer: buffer,
+                offsetIntoDestination: 0,
+                dataLength: dataCount
+            )
+            
+            return status
         }
         
-        guard let buffer = blockBuffer else { return }
+        guard status == noErr, let buffer = blockBuffer else { return }
         
         var sampleBuffer: CMSampleBuffer?
-        var sampleSize = lengthPrefixedData.count
+        var sampleSize = dataCount
         CMSampleBufferCreateReady(
             allocator: kCFAllocatorDefault,
             dataBuffer: buffer,
@@ -336,7 +351,7 @@ public class H264Decoder {
         
         guard let sample = sampleBuffer else { return }
         
-        var flags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
+        let flags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
         var infoFlags: VTDecodeInfoFlags = []
         
         VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: flags, infoFlagsOut: &infoFlags) { [weak self] status, flags, imageBuffer, pts, duration in
