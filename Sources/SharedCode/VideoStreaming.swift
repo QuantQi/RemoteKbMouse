@@ -107,20 +107,56 @@ public class H264Encoder {
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
         }
         
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)  // No B-frames
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)  // No B-frames for low latency
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps as CFNumber)  // Keyframe every 1 second
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
         
-        // Bitrate - HEVC is ~50% more efficient than H.264
-        let bitrate = (codec == .hevc) ? 50_000_000 : 75_000_000
-        let maxBitrate = (codec == .hevc) ? 80_000_000 : 120_000_000
+        // HIGH QUALITY 4K BITRATE SETTINGS
+        // For 4K@60fps: HEVC ~80-100 Mbps, H.264 ~120-150 Mbps
+        // These are high quality settings suitable for local network streaming
+        let is4K = (width >= 3840 || height >= 2160)
+        let isHD = (width >= 1920 || height >= 1080)
+        
+        let bitrate: Int
+        let maxBitrate: Int
+        
+        if codec == .hevc {
+            // HEVC is ~40-50% more efficient than H.264
+            if is4K {
+                bitrate = 80_000_000      // 80 Mbps for 4K
+                maxBitrate = 120_000_000  // 120 Mbps peak
+            } else if isHD {
+                bitrate = 40_000_000      // 40 Mbps for 1080p+
+                maxBitrate = 60_000_000   // 60 Mbps peak
+            } else {
+                bitrate = 20_000_000      // 20 Mbps for lower res
+                maxBitrate = 30_000_000
+            }
+        } else {
+            // H.264 needs higher bitrate for same quality
+            if is4K {
+                bitrate = 120_000_000     // 120 Mbps for 4K
+                maxBitrate = 180_000_000  // 180 Mbps peak
+            } else if isHD {
+                bitrate = 60_000_000      // 60 Mbps for 1080p+
+                maxBitrate = 90_000_000   // 90 Mbps peak
+            } else {
+                bitrate = 30_000_000      // 30 Mbps for lower res
+                maxBitrate = 45_000_000
+            }
+        }
+        
+        print("Encoder bitrate: \(bitrate / 1_000_000) Mbps (max: \(maxBitrate / 1_000_000) Mbps)")
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: [maxBitrate, 1] as CFArray)
         
-        // Low latency tuning
+        // Quality settings - prioritize quality over speed for best 4K output
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowTemporalCompression, value: kCFBooleanTrue)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanFalse)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanFalse)  // Quality first
+        
+        // Set quality level (0.0-1.0, higher = better quality)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: 0.9 as CFNumber)
         
         VTCompressionSessionPrepareToEncodeFrames(session)
         let codecName = (codec == .hevc) ? "HEVC" : "H.264"

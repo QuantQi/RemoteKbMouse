@@ -40,40 +40,62 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             return
         }
         
-        print("Capturing display: \(display.width)x\(display.height)")
+        let nativeWidth = display.width
+        let nativeHeight = display.height
+        print("Display native resolution: \(nativeWidth)x\(nativeHeight)")
         
-        // Configure stream for maximum GPU performance
+        // Calculate capture resolution - up to 4K (3840x2160)
+        // Scale down if native is larger than 4K, otherwise use native
+        let max4KWidth = 3840
+        let max4KHeight = 2160
+        
+        let captureWidth: Int
+        let captureHeight: Int
+        
+        if nativeWidth > max4KWidth || nativeHeight > max4KHeight {
+            // Scale down to fit within 4K while maintaining aspect ratio
+            let widthRatio = Double(max4KWidth) / Double(nativeWidth)
+            let heightRatio = Double(max4KHeight) / Double(nativeHeight)
+            let scale = min(widthRatio, heightRatio)
+            captureWidth = Int(Double(nativeWidth) * scale)
+            captureHeight = Int(Double(nativeHeight) * scale)
+            print("Scaling to 4K: \(captureWidth)x\(captureHeight)")
+        } else {
+            // Use native resolution (up to 4K)
+            captureWidth = nativeWidth
+            captureHeight = nativeHeight
+        }
+        
+        // Configure stream for MAXIMUM QUALITY 4K@60Hz
         let config = SCStreamConfiguration()
-        config.width = display.width
-        config.height = display.height
+        config.width = captureWidth
+        config.height = captureHeight
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60)  // 60 fps
         
-        // Use hardware-optimal pixel format
-        // 420YpCbCr8BiPlanarVideoRange is optimal for hardware video encoding
+        // Use hardware-optimal pixel format for encoding
+        // 420YpCbCr8BiPlanarVideoRange is optimal for hardware HEVC encoding
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         
         config.showsCursor = true
-        config.queueDepth = 8  // Buffer for smooth streaming
+        config.queueDepth = 8  // Buffer for smooth 60fps streaming
         
-        // GPU-specific optimizations
-        config.colorSpaceName = CGColorSpace.displayP3  // Modern wide color
+        // High quality color space
+        config.colorSpaceName = CGColorSpace.displayP3  // Wide color gamut
         
         if #available(macOS 14.0, *) {
-            config.captureResolution = .nominal  // Native resolution
-            config.presenterOverlayPrivacyAlertSetting = .never  // No presenter overlay
+            // Use best resolution available
+            config.captureResolution = .best
+            config.presenterOverlayPrivacyAlertSetting = .never
         }
         
         if #available(macOS 14.2, *) {
-            config.includeChildWindows = true  // Capture child windows too
+            config.includeChildWindows = true
         }
         
-        let captureWidth = Int32(config.width)
-        let captureHeight = Int32(config.height)
+        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (4K max, GPU-accelerated)")
         
-        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (GPU-accelerated)")
-        
-        // Create encoder with GPU acceleration
-        encoder = H264Encoder(width: captureWidth, height: captureHeight, fps: 60)
+        // Create encoder with GPU acceleration - 4K@60Hz settings
+        encoder = H264Encoder(width: Int32(captureWidth), height: Int32(captureHeight), fps: 60)
         encoder?.onEncodedFrame = { [weak self] data, isKeyframe in
             self?.onEncodedFrame?(data, isKeyframe)
         }
