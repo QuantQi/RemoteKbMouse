@@ -42,10 +42,8 @@ class KVMController: ObservableObject {
     @Published var isControllingRemote: Bool = false {
         didSet {
             if isControllingRemote {
-                startEventTap()
                 hideCursorAndLock()
             } else {
-                stopEventTap()
                 showCursorAndUnlock()
             }
         }
@@ -59,14 +57,11 @@ class KVMController: ObservableObject {
     // Event Tap
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private let magicComboKey: CGKeyCode = 59 // Left Control
+    private let toggleKeyCode: CGKeyCode = 53 // Escape key
     
     // Cursor lock position (center of screen)
     private var cursorLockPosition: CGPoint = .zero
     private var cursorLockTimer: Timer?
-    private var controlKeyTapCount: Int = 0
-    private var lastControlKeyTime: TimeInterval = 0
-    private var lastMagicKeyPressTime: TimeInterval = 0
     
     // Cached permission state (checked once at launch)
     private var hasInputMonitoringPermission: Bool = false
@@ -76,6 +71,7 @@ class KVMController: ObservableObject {
         checkAndCachePermissions()
         setupVideoCapture()
         startBrowsing()
+        startEventTap() // Start event tap immediately to detect toggle combo
     }
     
     deinit {
@@ -367,33 +363,24 @@ class KVMController: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
         
-        // Magic Combo check: double tap Left Control key
-        // Check both keyDown and flagsChanged for Control key
+        // Toggle combo: Ctrl+Shift+Escape
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        let isControlKey = (type == .keyDown && keyCode == magicComboKey) ||
-                          (type == .flagsChanged && keyCode == magicComboKey)
+        let flags = event.flags
+        let isEscapeDown = (type == .keyDown && keyCode == toggleKeyCode)
+        let hasCtrlShift = flags.contains(.maskControl) && flags.contains(.maskShift)
         
-        if isControlKey {
-            let currentTime = ProcessInfo.processInfo.systemUptime
-            
-            // Reset count if too much time passed
-            if currentTime - lastControlKeyTime > 0.4 {
-                controlKeyTapCount = 0
-            }
-            
-            controlKeyTapCount += 1
-            lastControlKeyTime = currentTime
-            
-            print("Control key tap #\(controlKeyTapCount)")
-            fflush(stdout)
-            
-            if controlKeyTapCount >= 2 {
-                print("Magic combo detected! Releasing control.")
+        if isEscapeDown && hasCtrlShift {
+            // Check connection before entering remote control
+            if !isControllingRemote && connection?.state != .ready {
+                print("Cannot enter remote control: No server connection.")
                 fflush(stdout)
-                controlKeyTapCount = 0
-                DispatchQueue.main.async { self.isControllingRemote = false }
-                return nil // Consume the event
+                return Unmanaged.passUnretained(event)
             }
+            
+            print("Toggle combo detected! Switching control.")
+            fflush(stdout)
+            DispatchQueue.main.async { self.isControllingRemote.toggle() }
+            return nil // Consume the event
         }
         
         // If we're not controlling remote, pass the event through unmodified
@@ -594,13 +581,12 @@ struct ContentView: View {
                         
                         Spacer()
                         
-                        Text("Double-tap Left Control to release")
+                        Text("Ctrl+Shift+Escape to toggle")
                             .font(.caption)
                             .padding(8)
                             .background(Color.black.opacity(0.6))
                             .foregroundColor(.gray)
                             .cornerRadius(8)
-                            .opacity(kvmController.isControllingRemote ? 1 : 0)
                     }
                     .padding()
                     
@@ -609,7 +595,7 @@ struct ContentView: View {
                     Button(action: {
                         kvmController.toggleRemoteControl()
                     }) {
-                        Text(kvmController.isControllingRemote ? "Release Control (or double-tap Left Ctrl)" : "Control MacBook")
+                        Text(kvmController.isControllingRemote ? "Release Control" : "Control MacBook")
                             .font(.headline)
                             .padding()
                             .frame(minWidth: 250)
