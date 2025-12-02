@@ -134,6 +134,8 @@ class KVMController: ObservableObject {
     @Published var videoSourceMode: VideoSourceMode = .networkStream
     @Published var currentFrame: CGImage?  // Simple CGImage for display
     @Published var videoError: String?  // Error message for video issues
+    @Published var isVirtualDisplayMode: Bool = false  // True if server is in virtual display mode
+    @Published var displayModeInfo: String = "Connecting..."  // Status info for UI
     
     // Video display layer (for network stream mode)
     let videoLayer = CALayer()
@@ -146,6 +148,9 @@ class KVMController: ObservableObject {
     private var browser: NWBrowser?
     private var connection: NWConnection?
     private var serverScreenSize: CGSize = CGSize(width: 1920, height: 1080)
+    private var serverCapabilities: ServerCapabilities?
+    private var pendingDisplayMode: DesiredDisplayMode?
+    private var currentVirtualDisplayID: UInt32?
     
     // Video decoding
     private var decoder: H264Decoder?
@@ -353,6 +358,7 @@ class KVMController: ObservableObject {
         
         // print("[EDGE-CLIENT] Client screen: \(screen.frame)")
         // print("[EDGE-CLIENT] Server screen size: \(serverScreenSize)")
+        // print("[EDGE-CLIENT] Virtual display mode: \(isVirtualDisplayMode)")
         
         // Map Y position proportionally from client to server screen
         // Clamp Y to screen bounds for safety
@@ -360,10 +366,10 @@ class KVMController: ObservableObject {
         let yRatio = (clampedY - screen.frame.minY) / clientScreenSize.height
         let serverY = yRatio * serverScreenSize.height
         // Warp to 20 points inside the right edge to avoid immediate edge trigger
+        // For virtual display, this is relative to 0,0 (server will translate to virtual display frame)
         let serverX = serverScreenSize.width - 20.0
         
-        // print("[EDGE-CLIENT] Sending warpCursor to server: (\(serverX), \(serverY))")
-        // fflush(stdout)
+        print("[Client] Sending warpCursor to server: (\(serverX), \(serverY)), virtual=\(isVirtualDisplayMode)")
         
         // Send warp cursor command to server
         let warpEvent = WarpCursorEvent(x: serverX, y: serverY)
@@ -430,16 +436,76 @@ class KVMController: ObservableObject {
                 // print("Connected to server.")
                 self?.startReceiving() // Start receiving messages from server
                 self?.clipboardSync.startPolling()
+                // Note: We'll send desired display mode after receiving server capabilities
             case .failed, .cancelled:
                 // print("Connection lost.")
                 self?.connection = nil
                 self?.clipboardSync.stopPolling()
-                DispatchQueue.main.async { self?.isControllingRemote = false }
+                self?.serverCapabilities = nil
+                self?.isVirtualDisplayMode = false
+                DispatchQueue.main.async { 
+                    self?.isControllingRemote = false
+                    self?.displayModeInfo = "Disconnected"
+                }
             default:
                 break
             }
         }
         connection?.start(queue: .main)
+    }
+    
+    /// Send desired display mode to server based on current window size
+    private func sendDesiredDisplayMode() {
+        guard connection?.state == .ready else { return }
+        
+        // Get the window size (or use default)
+        let windowSize: CGSize
+        if let window = NSApplication.shared.windows.first {
+            windowSize = window.frame.size
+        } else {
+            // Default to main screen size
+            windowSize = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+        }
+        
+        let scale: Double = Double(NSScreen.main?.backingScaleFactor ?? 2.0)
+        let mode = DesiredDisplayMode(
+            width: Int(Double(windowSize.width) * scale),
+            height: Int(Double(windowSize.height) * scale),
+            scale: scale,
+            refreshRate: 60
+        )
+        
+        pendingDisplayMode = mode
+        send(event: .clientDesiredDisplayMode(mode))
+        print("[Client] Sent desired display mode: \(mode.width)x\(mode.height) scale=\(mode.scale)")
+        
+        DispatchQueue.main.async {
+            self.displayModeInfo = "Requesting \(mode.width)x\(mode.height)..."
+        }
+    }
+    
+    /// Called when window resizes - request new display mode
+    func handleWindowResize(newSize: CGSize) {
+        guard connection?.state == .ready,
+              serverCapabilities?.supportsVirtualDisplay == true else { return }
+        
+        let scale: Double = Double(NSScreen.main?.backingScaleFactor ?? 2.0)
+        let mode = DesiredDisplayMode(
+            width: Int(Double(newSize.width) * scale),
+            height: Int(Double(newSize.height) * scale),
+            scale: scale,
+            refreshRate: 60
+        )
+        
+        // Only send if significantly different from current mode
+        if let pending = pendingDisplayMode,
+           abs(pending.width - mode.width) < 100 && abs(pending.height - mode.height) < 100 {
+            return
+        }
+        
+        pendingDisplayMode = mode
+        send(event: .clientDesiredDisplayMode(mode))
+        print("[Client] Requested new display mode: \(mode.width)x\(mode.height)")
     }
     
     // MARK: - Receive from Server
@@ -604,10 +670,42 @@ class KVMController: ObservableObject {
         }
         
         switch event {
+        case .serverCapabilities(let capabilities):
+            serverCapabilities = capabilities
+            print("[Client] Server capabilities: virtualDisplay=\(capabilities.supportsVirtualDisplay), macOS=\(capabilities.macOSVersion)")
+            
+            // Now that we know server capabilities, send desired display mode
+            if capabilities.supportsVirtualDisplay {
+                sendDesiredDisplayMode()
+            } else {
+                DispatchQueue.main.async {
+                    self.displayModeInfo = "Mirror mode (server macOS \(capabilities.macOSVersion))"
+                    self.isVirtualDisplayMode = false
+                }
+            }
+            
+        case .virtualDisplayReady(let ready):
+            currentVirtualDisplayID = ready.displayID
+            isVirtualDisplayMode = ready.isVirtual
+            serverScreenSize = CGSize(width: ready.width, height: ready.height)
+            
+            print("[Client] Virtual display ready: \(ready.width)x\(ready.height), virtual=\(ready.isVirtual), displayID=\(ready.displayID)")
+            
+            DispatchQueue.main.async {
+                if ready.isVirtual {
+                    self.displayModeInfo = "Virtual display \(ready.width)x\(ready.height)"
+                } else {
+                    self.displayModeInfo = "Mirror mode \(ready.width)x\(ready.height)"
+                }
+            }
+            
         case .screenInfo(let info):
             serverScreenSize = CGSize(width: info.width, height: info.height)
-            // print("[EDGE-CLIENT] Received server screen size: \(serverScreenSize)")
-            // fflush(stdout)
+            if let displayID = info.displayID {
+                currentVirtualDisplayID = displayID
+            }
+            isVirtualDisplayMode = info.isVirtual
+            print("[Client] Screen info: \(info.width)x\(info.height), virtual=\(info.isVirtual)")
             
         case .controlRelease:
             // print("[EDGE-CLIENT] ===== RECEIVED CONTROL RELEASE =====")
@@ -1151,82 +1249,98 @@ struct ContentView: View {
     @State private var showControls = true
     
     var body: some View {
-        ZStack {
-            // Video feed based on source mode
-            Group {
-                if kvmController.videoSourceMode == .captureCard {
-                    VideoView(session: kvmController.captureSession)
-                } else {
-                    NetworkVideoView(videoLayer: kvmController.videoLayer)
-                }
-            }
-            .ignoresSafeArea(.all)
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showControls.toggle()
-                }
-            }
-            
-            // Video error overlay
-            if let error = kvmController.videoError {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.yellow)
-                        Text(error)
-                            .font(.caption)
+        GeometryReader { geometry in
+            ZStack {
+                // Video feed based on source mode
+                Group {
+                    if kvmController.videoSourceMode == .captureCard {
+                        VideoView(session: kvmController.captureSession)
+                    } else {
+                        NetworkVideoView(videoLayer: kvmController.videoLayer)
                     }
-                    .padding(8)
-                    .background(Color.red.opacity(0.8))
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-                    .padding(.bottom, 60)
                 }
-            }
+                .ignoresSafeArea(.all)
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showControls.toggle()
+                    }
+                }
+                
+                // Video error overlay
+                if let error = kvmController.videoError {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.yellow)
+                            Text(error)
+                                .font(.caption)
+                        }
+                        .padding(8)
+                        .background(Color.red.opacity(0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                        .padding(.bottom, 60)
+                    }
+                }
 
-            // Overlay controls (can be hidden)
-            if showControls {
-                VStack {
-                    // Status bar at top
-                    HStack {
-                        Text(kvmController.isControllingRemote ? "🟢 Controlling Remote" : "⚪ Local Mode")
-                            .font(.caption)
-                            .padding(8)
-                            .background(Color.black.opacity(0.6))
-                            .foregroundColor(.white)
-                            .cornerRadius(8)
+                // Overlay controls (can be hidden)
+                if showControls {
+                    VStack {
+                        // Status bar at top
+                        HStack {
+                            Text(kvmController.isControllingRemote ? "🟢 Controlling Remote" : "⚪ Local Mode")
+                                .font(.caption)
+                                .padding(8)
+                                .background(Color.black.opacity(0.6))
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            
+                            // Display mode indicator
+                            Text(kvmController.isVirtualDisplayMode ? "📺 Virtual" : "🪞 Mirror")
+                                .font(.caption)
+                                .padding(8)
+                                .background(Color.black.opacity(0.6))
+                                .foregroundColor(kvmController.isVirtualDisplayMode ? .green : .orange)
+                                .cornerRadius(8)
+                            
+                            Spacer()
+                            
+                            Text(kvmController.displayModeInfo)
+                                .font(.caption)
+                                .padding(8)
+                                .background(Color.black.opacity(0.6))
+                                .foregroundColor(.gray)
+                                .cornerRadius(8)
+                        }
+                        .padding()
                         
                         Spacer()
                         
-                        Text("Ctrl+Shift+Escape to toggle")
-                            .font(.caption)
-                            .padding(8)
-                            .background(Color.black.opacity(0.6))
-                            .foregroundColor(.gray)
-                            .cornerRadius(8)
+                        Button(action: {
+                            kvmController.toggleRemoteControl()
+                        }) {
+                            Text(kvmController.isControllingRemote ? "Release Control" : "Control MacBook")
+                                .font(.headline)
+                                .padding()
+                                .frame(minWidth: 250)
+                                .background(kvmController.isControllingRemote ? Color.red : Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.bottom, 40)
                     }
-                    .padding()
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        kvmController.toggleRemoteControl()
-                    }) {
-                        Text(kvmController.isControllingRemote ? "Release Control" : "Control MacBook")
-                            .font(.headline)
-                            .padding()
-                            .frame(minWidth: 250)
-                            .background(kvmController.isControllingRemote ? Color.red : Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 40)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { _ in
+                // Request new display mode when window resizes
+                if let window = NSApplication.shared.windows.first {
+                    kvmController.handleWindowResize(newSize: window.frame.size)
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
     }
 }

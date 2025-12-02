@@ -216,10 +216,57 @@ public struct ClipboardPayload: Codable {
 public struct ScreenInfoEvent: Codable {
     public let width: Double
     public let height: Double
+    public let isVirtual: Bool       // true if reporting virtual display mode
+    public let displayID: UInt32?    // Display ID if virtual
     
-    public init(width: Double, height: Double) {
+    public init(width: Double, height: Double, isVirtual: Bool = false, displayID: UInt32? = nil) {
         self.width = width
         self.height = height
+        self.isVirtual = isVirtual
+        self.displayID = displayID
+    }
+}
+
+// MARK: - Display Frame (for mouse clamping)
+
+/// Represents a display frame with origin and size
+public struct DisplayFrame {
+    public let origin: CGPoint
+    public let size: CGSize
+    
+    public init(origin: CGPoint, size: CGSize) {
+        self.origin = origin
+        self.size = size
+    }
+    
+    public init(rect: CGRect) {
+        self.origin = rect.origin
+        self.size = rect.size
+    }
+    
+    public var minX: CGFloat { origin.x }
+    public var minY: CGFloat { origin.y }
+    public var maxX: CGFloat { origin.x + size.width }
+    public var maxY: CGFloat { origin.y + size.height }
+    public var width: CGFloat { size.width }
+    public var height: CGFloat { size.height }
+    
+    /// Clamp a point to within this display frame
+    public func clamp(_ point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: max(minX, min(point.x, maxX - 1)),
+            y: max(minY, min(point.y, maxY - 1))
+        )
+    }
+    
+    /// Check if point is at or past the right edge (for edge release detection)
+    public func isAtRightEdge(_ x: CGFloat, inset: CGFloat = EdgeDetectionConfig.edgeInset) -> Bool {
+        x >= maxX - inset
+    }
+    
+    /// Check if point is at or past the left edge
+    public func isAtLeftEdge(_ x: CGFloat, inset: CGFloat = EdgeDetectionConfig.edgeInset) -> Bool {
+        x <= minX + inset
     }
 }
 
@@ -344,24 +391,18 @@ public struct RemoteMouseEvent: Codable {
     }
     
     public func toCGEvent(screenSize: CGSize) -> CGEvent? {
+        return toCGEvent(displayFrame: DisplayFrame(origin: .zero, size: screenSize))
+    }
+    
+    /// Convert to CGEvent with explicit display frame (supports non-zero origin for virtual displays)
+    public func toCGEvent(displayFrame: DisplayFrame) -> CGEvent? {
         // Get current mouse position and apply delta
         let currentLocation = CGEvent(source: nil)?.location ?? CGPoint.zero
-        var newX = currentLocation.x + deltaX
-        var newY = currentLocation.y + deltaY
+        let newX = currentLocation.x + deltaX
+        let newY = currentLocation.y + deltaY
         
-        // Clamp to screen bounds
-        let clampedX = max(0, min(newX, Double(screenSize.width) - 1))
-        let clampedY = max(0, min(newY, Double(screenSize.height) - 1))
-        
-        // // Log if clamping occurred (cursor hit edge)
-        // if newX != clampedX || newY != clampedY {
-        //     print("[MOUSE] CLAMPED: (\\(String(format: \"%.1f\", newX)), \\(String(format: \"%.1f\", newY))) -> (\\(String(format: \"%.1f\", clampedX)), \\(String(format: \"%.1f\", clampedY))), screen=\\(screenSize)")
-        // }
-        
-        newX = clampedX
-        newY = clampedY
-        
-        let point = CGPoint(x: newX, y: newY)
+        // Clamp to display frame bounds (handles non-zero origin)
+        let clampedPoint = displayFrame.clamp(CGPoint(x: newX, y: newY))
         
         let cgEventType: CGEventType
         let mouseButton: CGMouseButton
@@ -414,7 +455,7 @@ public struct RemoteMouseEvent: Codable {
             return scrollEvent
         }
         
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: cgEventType, mouseCursorPosition: point, mouseButton: mouseButton) else {
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: cgEventType, mouseCursorPosition: clampedPoint, mouseButton: mouseButton) else {
             return nil
         }
         
