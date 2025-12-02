@@ -55,17 +55,27 @@ public class H264Encoder {
         
         compressionSession = session
         
-        // Configure for low latency streaming
+        // Configure for ULTRA LOW LATENCY streaming
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps * 2 as CFNumber)  // Keyframe every 2 seconds
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_Main_AutoLevel)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)  // No B-frames
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps as CFNumber)  // Keyframe every 1 second
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: (50_000_000) as CFNumber)  // 50 Mbps for 4K
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: [75_000_000, 1] as CFArray)  // Max 75 Mbps
+        
+        // High bitrate for quality on fast network
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: (100_000_000) as CFNumber)  // 100 Mbps
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: [150_000_000, 1] as CFArray)  // Max 150 Mbps
+        
+        // Low latency tuning
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowTemporalCompression, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanFalse)  // Keep quality
+        
+        // Use hardware encoder explicitly
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, value: kCFBooleanTrue)
         
         VTCompressionSessionPrepareToEncodeFrames(session)
-        print("H264 Encoder initialized: \(width)x\(height) @ \(fps)fps")
+        print("H264 Encoder initialized (low-latency): \(width)x\(height) @ \(fps)fps")
     }
     
     public func encode(pixelBuffer: CVPixelBuffer) {
@@ -289,13 +299,19 @@ public class H264Decoder {
         
         formatDescription = desc
         
+        // Force hardware decoder with low latency
         let decoderParams: [String: Any] = [
-            kVTDecompressionPropertyKey_RealTime as String: true
+            kVTDecompressionPropertyKey_RealTime as String: true,
+            kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder as String: true,
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true,
+            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String: true
         ]
         
+        // Output directly to GPU-compatible buffer for Metal/CALayer display
         let destImageBufferAttrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferMetalCompatibilityKey as String: true
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any]  // Enable IOSurface for GPU sharing
         ]
         
         var session: VTDecompressionSession?

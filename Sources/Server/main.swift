@@ -28,14 +28,19 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         
         print("Capturing display: \(display.width)x\(display.height)")
         
-        // Configure stream for 4K 60fps (or native resolution)
+        // Configure stream - use native resolution for performance
         let config = SCStreamConfiguration()
-        config.width = display.width * 2  // Retina scaling
-        config.height = display.height * 2
+        config.width = display.width   // Native resolution
+        config.height = display.height
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60)  // 60 fps
-        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange  // YUV is more efficient for H.264
         config.showsCursor = true
-        config.queueDepth = 3
+        config.queueDepth = 8  // More buffer for smoother streaming
+        
+        // Enable high performance capture
+        if #available(macOS 14.0, *) {
+            config.captureResolution = .nominal  // Use display's natural resolution
+        }
         
         // Use actual captured size for encoder
         let captureWidth = Int32(config.width)
