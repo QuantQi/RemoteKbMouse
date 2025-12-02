@@ -414,6 +414,7 @@ class ServerConnection {
     private var mouseEventCounter: Int = 0
     private var isReceivingRemoteInput: Bool = false
     private var warpCursorTime: TimeInterval = 0  // Time of last warp, skip edge checks briefly after
+    private var isCursorHidden: Bool = false  // Track cursor visibility
 
     init(nwConnection: NWConnection) {
         self.nwConnection = nwConnection
@@ -546,6 +547,26 @@ class ServerConnection {
         fflush(stdout)
         let event = RemoteInputEvent.controlRelease
         send(event: event)
+        // Hide cursor - client now has control
+        hideCursor()
+    }
+    
+    // MARK: - Cursor Visibility
+    
+    private func hideCursor() {
+        guard !isCursorHidden else { return }
+        CGDisplayHideCursor(CGMainDisplayID())
+        isCursorHidden = true
+        print("[EDGE-SERVER] Cursor hidden")
+        fflush(stdout)
+    }
+    
+    private func showCursor() {
+        guard isCursorHidden else { return }
+        CGDisplayShowCursor(CGMainDisplayID())
+        isCursorHidden = false
+        print("[EDGE-SERVER] Cursor shown")
+        fflush(stdout)
     }
     
     private func send(event: RemoteInputEvent) {
@@ -628,6 +649,8 @@ class ServerConnection {
                 fflush(stdout)
                 // Skip edge checks for 500ms after warp to let mouse events settle
                 warpCursorTime = CACurrentMediaTime()
+                // Show cursor - server now has control
+                showCursor()
                 
             case .startVideoStream:
                 startVideoStream()
@@ -722,6 +745,11 @@ class ServerConnection {
     private func stop(error: Error?) {
         stopVideoStream()
         clipboardSync.stopPolling()
+        // Make sure cursor is visible when connection ends
+        if isCursorHidden {
+            CGDisplayShowCursor(CGMainDisplayID())
+            isCursorHidden = false
+        }
         self.nwConnection.stateUpdateHandler = nil
         self.nwConnection.cancel()
         if let didStopCallback = self.didStopCallback {
