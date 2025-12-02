@@ -304,6 +304,8 @@ class KVMController: ObservableObject {
         }
     }
     
+    private var videoFrameCount: UInt64 = 0
+    
     private func processVideoFrame() -> Bool {
         // Need at least header size
         guard receiveBuffer.count >= VideoFrameHeader.headerSize else { return false }
@@ -324,6 +326,12 @@ class KVMController: ObservableObject {
         // Extract frame data
         let frameData = receiveBuffer.subdata(in: VideoFrameHeader.headerSize..<totalNeeded)
         receiveBuffer.removeSubrange(0..<totalNeeded)
+        
+        videoFrameCount += 1
+        let isKeyframe = frameHeader?.isKeyframe ?? false
+        if videoFrameCount <= 5 || videoFrameCount % 60 == 0 || isKeyframe {
+            print("Received video frame #\(videoFrameCount): \(frameData.count) bytes, keyframe: \(isKeyframe)")
+        }
         
         // Decode the frame
         if videoSourceMode == .networkStream {

@@ -102,11 +102,16 @@ public class H264Encoder {
         
         guard let pointer = dataPointer else { return }
         
-        // Check if keyframe
+        // Check if keyframe - kCMSampleAttachmentKey_NotSync absent or false means it's a sync frame (keyframe)
         var isKeyframe = false
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
            let first = attachments.first {
-            isKeyframe = !(first[kCMSampleAttachmentKey_NotSync] as? Bool ?? true)
+            // If NotSync key is missing or false, it's a keyframe
+            let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool ?? false
+            isKeyframe = !notSync
+        } else {
+            // No attachments means it's a keyframe (first frame)
+            isKeyframe = true
         }
         
         // For keyframes, prepend SPS/PPS
@@ -207,9 +212,11 @@ public class H264Decoder {
         for nal in nalUnits {
             switch nal.type {
             case 7:  // SPS
+                print("Decoder: Received SPS (\(nal.data.count) bytes)")
                 spsData = nal.data
                 tryCreateDecompressionSession()
             case 8:  // PPS
+                print("Decoder: Received PPS (\(nal.data.count) bytes)")
                 ppsData = nal.data
                 tryCreateDecompressionSession()
             case 5, 1:  // IDR or non-IDR slice
