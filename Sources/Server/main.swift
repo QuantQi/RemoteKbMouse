@@ -3,6 +3,89 @@ import Network
 import CoreGraphics
 import ApplicationServices
 import SharedCode
+import ScreenCaptureKit
+import VideoToolbox
+import CoreMedia
+
+// MARK: - Screen Capturer
+
+@available(macOS 12.3, *)
+class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
+    private var stream: SCStream?
+    private var encoder: H264Encoder?
+    private var isStreaming = false
+    
+    var onEncodedFrame: ((Data, Bool) -> Void)?  // (data, isKeyframe)
+    
+    func startCapture() async throws {
+        // Get available content
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        
+        guard let display = content.displays.first else {
+            print("No display found")
+            return
+        }
+        
+        print("Capturing display: \(display.width)x\(display.height)")
+        
+        // Configure stream for 4K 60fps (or native resolution)
+        let config = SCStreamConfiguration()
+        config.width = display.width * 2  // Retina scaling
+        config.height = display.height * 2
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 60)  // 60 fps
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.showsCursor = true
+        config.queueDepth = 3
+        
+        // Use actual captured size for encoder
+        let captureWidth = Int32(config.width)
+        let captureHeight = Int32(config.height)
+        
+        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps")
+        
+        // Create encoder
+        encoder = H264Encoder(width: captureWidth, height: captureHeight, fps: 60)
+        encoder?.onEncodedFrame = { [weak self] data, isKeyframe in
+            self?.onEncodedFrame?(data, isKeyframe)
+        }
+        
+        // Create filter for the display
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        
+        // Create stream
+        stream = SCStream(filter: filter, configuration: config, delegate: self)
+        
+        try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "screen.capture"))
+        
+        try await stream?.startCapture()
+        isStreaming = true
+        print("Screen capture started")
+    }
+    
+    func stopCapture() async {
+        guard isStreaming else { return }
+        try? await stream?.stopCapture()
+        stream = nil
+        encoder = nil
+        isStreaming = false
+        print("Screen capture stopped")
+    }
+    
+    // SCStreamOutput
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        encoder?.encode(pixelBuffer: pixelBuffer)
+    }
+    
+    // SCStreamDelegate
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        print("Stream stopped with error: \(error)")
+        isStreaming = false
+    }
+}
+
+// MARK: - Server
 
 class Server {
     private var listener: NWListener
@@ -92,6 +175,11 @@ class ServerConnection {
 
     private let nwConnection: NWConnection
     var didStopCallback: (() -> Void)? = nil
+    
+    // Video streaming (Any? to avoid availability issues with ScreenCapturer)
+    private var screenCapturer: Any?
+    private var frameCount: UInt32 = 0
+    private let startTime = CACurrentMediaTime()
 
     init(nwConnection: NWConnection) {
         self.nwConnection = nwConnection
@@ -109,14 +197,65 @@ class ServerConnection {
             print("Connection failed with error: \(error)")
             self.stop(error: error)
         case .cancelled:
-            // The connection has been cancelled, so stop processing
             self.stop(error: nil)
         case .ready:
             print("Connection ready.")
-            // Send screen info to client on connect
             sendScreenInfo()
+            // Auto-start video streaming
+            startVideoStream()
         default:
             break
+        }
+    }
+    
+    private func startVideoStream() {
+        guard #available(macOS 12.3, *) else {
+            print("Video streaming requires macOS 12.3 or later")
+            return
+        }
+        guard screenCapturer == nil else { return }
+        print("Starting video stream...")
+        
+        let capturer = ScreenCapturer()
+        capturer.onEncodedFrame = { [weak self] data, isKeyframe in
+            self?.sendVideoFrame(data: data, isKeyframe: isKeyframe)
+        }
+        screenCapturer = capturer
+        
+        Task {
+            do {
+                try await capturer.startCapture()
+            } catch {
+                print("Failed to start screen capture: \(error)")
+            }
+        }
+    }
+    
+    private func stopVideoStream() {
+        guard #available(macOS 12.3, *) else { return }
+        guard let capturer = screenCapturer as? ScreenCapturer else { return }
+        print("Stopping video stream...")
+        screenCapturer = nil
+        
+        Task {
+            await capturer.stopCapture()
+        }
+    }
+    
+    private func sendVideoFrame(data: Data, isKeyframe: Bool) {
+        guard nwConnection.state == .ready else { return }
+        
+        let timestamp = UInt32((CACurrentMediaTime() - startTime) * 1000)
+        let header = VideoFrameHeader(frameSize: UInt32(data.count), timestamp: timestamp, isKeyframe: isKeyframe)
+        
+        var frameData = header.toData()
+        frameData.append(data)
+        
+        nwConnection.send(content: frameData, completion: .idempotent)
+        frameCount += 1
+        
+        if frameCount % 60 == 0 {
+            print("Sent \(frameCount) frames, last size: \(data.count) bytes, keyframe: \(isKeyframe)")
         }
     }
     
@@ -197,18 +336,21 @@ class ServerConnection {
                 
                 if let cgEvent = mouseEvent.toCGEvent(screenSize: screenSize) {
                     cgEvent.post(tap: .cgSessionEventTap)
-                    
-                    // Check for right edge hit after posting the event
                     checkRightEdge(screenSize: screenSize)
                 } else {
                     print("Failed to convert mouse event to CGEvent")
                 }
                 
             case .warpCursor(let warpEvent):
-                // Warp cursor to specified position
                 let point = CGPoint(x: warpEvent.x, y: warpEvent.y)
                 CGWarpMouseCursorPosition(point)
                 print("Warped cursor to \(point)")
+                
+            case .startVideoStream:
+                startVideoStream()
+                
+            case .stopVideoStream:
+                stopVideoStream()
                 
             case .screenInfo, .controlRelease:
                 // These are server-to-client events, ignore if received
@@ -238,6 +380,7 @@ class ServerConnection {
     }
 
     private func stop(error: Error?) {
+        stopVideoStream()
         self.nwConnection.stateUpdateHandler = nil
         self.nwConnection.cancel()
         if let didStopCallback = self.didStopCallback {

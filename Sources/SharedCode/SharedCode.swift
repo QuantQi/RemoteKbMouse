@@ -4,6 +4,7 @@ import CoreGraphics
 // The Bonjour service name, like "_myservice._tcp"
 public enum NetworkConstants {
     public static let serviceType = "_remotekvm._tcp"
+    public static let videoServiceType = "_remotekvmvideo._tcp"  // Separate service for video
 }
 
 // MARK: - Remote Input Event (unified keyboard + mouse)
@@ -14,6 +15,43 @@ public enum RemoteInputEvent: Codable {
     case screenInfo(ScreenInfoEvent)      // Server tells client its screen size
     case controlRelease                    // Server tells client to release control (edge hit)
     case warpCursor(WarpCursorEvent)       // Client tells server to warp cursor
+    case startVideoStream                  // Client requests video stream
+    case stopVideoStream                   // Client stops video stream
+}
+
+// MARK: - Video Frame Header (binary protocol, not JSON)
+// Format: [4 bytes: frame size][4 bytes: timestamp][1 byte: is keyframe][data...]
+
+public struct VideoFrameHeader {
+    public let frameSize: UInt32
+    public let timestamp: UInt32      // milliseconds
+    public let isKeyframe: Bool
+    
+    public static let headerSize = 9  // 4 + 4 + 1 bytes
+    
+    public init(frameSize: UInt32, timestamp: UInt32, isKeyframe: Bool) {
+        self.frameSize = frameSize
+        self.timestamp = timestamp
+        self.isKeyframe = isKeyframe
+    }
+    
+    public func toData() -> Data {
+        var data = Data(capacity: Self.headerSize)
+        var size = frameSize.bigEndian
+        var ts = timestamp.bigEndian
+        data.append(Data(bytes: &size, count: 4))
+        data.append(Data(bytes: &ts, count: 4))
+        data.append(isKeyframe ? 1 : 0)
+        return data
+    }
+    
+    public static func fromData(_ data: Data) -> VideoFrameHeader? {
+        guard data.count >= headerSize else { return nil }
+        let size = data.subdata(in: 0..<4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+        let ts = data.subdata(in: 4..<8).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+        let keyframe = data[8] == 1
+        return VideoFrameHeader(frameSize: size, timestamp: ts, isKeyframe: keyframe)
+    }
 }
 
 // MARK: - Screen Info Event

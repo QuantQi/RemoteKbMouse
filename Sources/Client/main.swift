@@ -4,6 +4,15 @@ import Network
 import CoreGraphics
 import SharedCode
 import AppKit
+import VideoToolbox
+import CoreMedia
+
+// MARK: - Video Source Mode
+
+enum VideoSourceMode {
+    case captureCard      // Hardware capture card (original)
+    case networkStream    // H.264 stream from server
+}
 
 @main
 struct ClientApp: App {
@@ -11,7 +20,6 @@ struct ClientApp: App {
     
     init() {
         // Required for SwiftUI apps built with SPM and run from terminal
-        // This ensures the app appears as a regular GUI application
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
@@ -21,7 +29,6 @@ struct ClientApp: App {
             ContentView()
                 .environmentObject(kvmController)
                 .onAppear {
-                    // Enter fullscreen mode when the window appears
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         if let window = NSApplication.shared.windows.first {
                             window.toggleFullScreen(nil)
@@ -33,12 +40,6 @@ struct ClientApp: App {
 }
 
 class KVMController: ObservableObject {
-    // To be implemented:
-    // 1. Video Capture State
-    // 2. Network Browser and Connection State
-    // 3. Control State (isControllingRemote)
-    // 4. Event Tap manager
-    
     @Published var isControllingRemote: Bool = false {
         didSet {
             if isControllingRemote {
@@ -49,11 +50,19 @@ class KVMController: ObservableObject {
         }
     }
     @Published var captureSession = AVCaptureSession()
+    @Published var videoSourceMode: VideoSourceMode = .networkStream
+    @Published var currentFrame: CGImage?  // For network stream display
     
     // Networking
     private var browser: NWBrowser?
     private var connection: NWConnection?
-    private var serverScreenSize: CGSize = CGSize(width: 1920, height: 1080) // Default, updated on connect
+    private var serverScreenSize: CGSize = CGSize(width: 1920, height: 1080)
+    
+    // Video decoding
+    private var decoder: H264Decoder?
+    private var videoFrameBuffer = Data()
+    private var expectedFrameSize: UInt32 = 0
+    private var frameHeader: VideoFrameHeader?
     
     // Event Tap
     private var eventTap: CFMachPort?
@@ -64,15 +73,41 @@ class KVMController: ObservableObject {
     private var cursorLockPosition: CGPoint = .zero
     private var cursorLockTimer: Timer?
     
-    // Cached permission state (checked once at launch)
+    // Cached permission state
     private var hasInputMonitoringPermission: Bool = false
     
     init() {
         print("KVMController initialized.")
         checkAndCachePermissions()
-        setupVideoCapture()
+        
+        if videoSourceMode == .captureCard {
+            setupVideoCapture()
+        } else {
+            setupVideoDecoder()
+        }
+        
         startBrowsing()
-        startEventTap() // Start event tap immediately to detect toggle combo
+        startEventTap()
+    }
+    
+    private func setupVideoDecoder() {
+        decoder = H264Decoder()
+        decoder?.onDecodedFrame = { [weak self] pixelBuffer, pts in
+            self?.handleDecodedFrame(pixelBuffer)
+        }
+        print("Video decoder initialized")
+    }
+    
+    private func handleDecodedFrame(_ pixelBuffer: CVPixelBuffer) {
+        // Convert to CGImage for display
+        var cgImage: CGImage?
+        VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
+        
+        if let image = cgImage {
+            DispatchQueue.main.async {
+                self.currentFrame = image
+            }
+        }
     }
     
     deinit {
@@ -244,6 +279,13 @@ class KVMController: ObservableObject {
     
     private func processReceivedData(_ data: Data) {
         receiveBuffer.append(data)
+        
+        // Try to process video frames first (binary format)
+        while processVideoFrame() {
+            // Keep processing while we have complete frames
+        }
+        
+        // Then check for JSON messages (newline delimited)
         while let range = receiveBuffer.range(of: Self.newline) {
             let messageData = receiveBuffer.subdata(in: 0..<range.lowerBound)
             receiveBuffer.removeSubrange(0..<range.upperBound)
@@ -253,9 +295,42 @@ class KVMController: ObservableObject {
         }
     }
     
+    private func processVideoFrame() -> Bool {
+        // Need at least header size
+        guard receiveBuffer.count >= VideoFrameHeader.headerSize else { return false }
+        
+        // Parse header if we don't have one yet
+        if frameHeader == nil {
+            let headerData = receiveBuffer.subdata(in: 0..<VideoFrameHeader.headerSize)
+            frameHeader = VideoFrameHeader.fromData(headerData)
+            
+            guard let header = frameHeader else { return false }
+            expectedFrameSize = header.frameSize
+        }
+        
+        // Check if we have the complete frame
+        let totalNeeded = VideoFrameHeader.headerSize + Int(expectedFrameSize)
+        guard receiveBuffer.count >= totalNeeded else { return false }
+        
+        // Extract frame data
+        let frameData = receiveBuffer.subdata(in: VideoFrameHeader.headerSize..<totalNeeded)
+        receiveBuffer.removeSubrange(0..<totalNeeded)
+        
+        // Decode the frame
+        if videoSourceMode == .networkStream {
+            decoder?.decode(nalData: frameData)
+        }
+        
+        // Reset for next frame
+        frameHeader = nil
+        expectedFrameSize = 0
+        
+        return true
+    }
+    
     private func handleServerMessage(_ data: Data) {
         guard let event = try? JSONDecoder().decode(RemoteInputEvent.self, from: data) else {
-            print("Failed to decode server message")
+            // Not a JSON message, might be partial video data that got misinterpreted
             return
         }
         
@@ -268,7 +343,7 @@ class KVMController: ObservableObject {
             print("Server requested control release (right edge hit)")
             DispatchQueue.main.async { self.isControllingRemote = false }
             
-        case .keyboard, .mouse, .warpCursor:
+        case .keyboard, .mouse, .warpCursor, .startVideoStream, .stopVideoStream:
             // These are client-to-server events, ignore
             break
         }
@@ -604,7 +679,6 @@ class KVMController: ObservableObject {
             }
             
             if !captureSession.isRunning {
-                // Start the session on a background thread
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     self?.captureSession.startRunning()
                 }
@@ -616,6 +690,8 @@ class KVMController: ObservableObject {
     }
 }
 
+// MARK: - Video Views
+
 struct VideoView: NSViewRepresentable {
     let session: AVCaptureSession
     
@@ -624,7 +700,7 @@ struct VideoView: NSViewRepresentable {
         view.wantsLayer = true
         
         let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.videoGravity = .resizeAspectFill  // Fill the entire view
+        previewLayer.videoGravity = .resizeAspectFill
         previewLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         
         if #available(macOS 14.0, *) {
@@ -632,20 +708,35 @@ struct VideoView: NSViewRepresentable {
         }
         
         view.layer = previewLayer
-        
         return view
     }
     
     func updateNSView(_ nsView: NSView, context: Context) {
         if let previewLayer = nsView.layer as? AVCaptureVideoPreviewLayer {
             previewLayer.session = session
-            // Ensure the layer fills the view
             previewLayer.frame = nsView.bounds
         }
     }
 }
 
-// Custom NSView that updates layer frame on resize
+struct NetworkVideoView: View {
+    let image: CGImage?
+    
+    var body: some View {
+        if let cgImage = image {
+            Image(decorative: cgImage, scale: 1.0, orientation: .up)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            Color.black
+                .overlay(
+                    Text("Waiting for video stream...")
+                        .foregroundColor(.gray)
+                )
+        }
+    }
+}
+
 class VideoContainerView: NSView {
     override func layout() {
         super.layout()
@@ -660,15 +751,20 @@ struct ContentView: View {
     
     var body: some View {
         ZStack {
-            // Live video feed - fills entire screen
-            VideoView(session: kvmController.captureSession)
-                .ignoresSafeArea(.all)
-                .onTapGesture {
-                    // Toggle control visibility on tap
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showControls.toggle()
-                    }
+            // Video feed based on source mode
+            Group {
+                if kvmController.videoSourceMode == .captureCard {
+                    VideoView(session: kvmController.captureSession)
+                } else {
+                    NetworkVideoView(image: kvmController.currentFrame)
                 }
+            }
+            .ignoresSafeArea(.all)
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showControls.toggle()
+                }
+            }
 
             // Overlay controls (can be hidden)
             if showControls {
