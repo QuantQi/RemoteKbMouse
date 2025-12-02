@@ -6,6 +6,7 @@ import SharedCode
 import AppKit
 import VideoToolbox
 import CoreMedia
+import IOSurface
 
 // MARK: - Video Source Mode
 
@@ -51,10 +52,13 @@ class KVMController: ObservableObject {
     }
     @Published var captureSession = AVCaptureSession()
     @Published var videoSourceMode: VideoSourceMode = .networkStream
+    @Published var currentFrame: CGImage?  // Simple CGImage for display
     
-    // High-performance video display using AVSampleBufferDisplayLayer
-    let displayLayer = AVSampleBufferDisplayLayer()
-    private var formatDescription: CMVideoFormatDescription?
+    // Video display layer (for network stream mode)
+    let videoLayer = CALayer()
+    
+    // CIContext for fast GPU-based image conversion
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     
     // Networking
     private var browser: NWBrowser?
@@ -83,19 +87,9 @@ class KVMController: ObservableObject {
         print("KVMController initialized.")
         checkAndCachePermissions()
         
-        // Configure display layer for maximum performance
-        displayLayer.videoGravity = .resizeAspect
-        displayLayer.preventsCapture = false
-        displayLayer.preventsDisplaySleepDuringVideoPlayback = true
-        
-        // Set up timebase for real-time display (required for AVSampleBufferDisplayLayer)
-        var timebase: CMTimebase?
-        CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &timebase)
-        if let timebase = timebase {
-            CMTimebaseSetRate(timebase, rate: 1.0)
-            CMTimebaseSetTime(timebase, time: .zero)
-            displayLayer.controlTimebase = timebase
-        }
+        // Configure video layer
+        videoLayer.contentsGravity = .resizeAspect
+        videoLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
         
         if videoSourceMode == .captureCard {
             setupVideoCapture()
@@ -116,57 +110,25 @@ class KVMController: ObservableObject {
     }
     
     private func handleDecodedFrame(_ pixelBuffer: CVPixelBuffer) {
-        // Create CMSampleBuffer for AVSampleBufferDisplayLayer (zero-copy, hardware accelerated)
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         
-        // Create format description if needed
-        if formatDescription == nil {
-            var desc: CMVideoFormatDescription?
-            CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer, formatDescriptionOut: &desc)
-            formatDescription = desc
-            print("Created format description: \(width)x\(height)")
+        // Convert to CGImage using GPU-accelerated CIContext
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+            print("Failed to create CGImage")
+            return
         }
         
-        guard let formatDesc = formatDescription else { return }
-        
-        // Use current host time for immediate display
-        let now = CMClockGetTime(CMClockGetHostTimeClock())
-        var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: 60),
-            presentationTimeStamp: now,
-            decodeTimeStamp: .invalid
-        )
-        
-        // Create sample buffer
-        var sampleBuffer: CMSampleBuffer?
-        let status = CMSampleBufferCreateForImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            dataReady: true,
-            makeDataReadyCallback: nil,
-            refcon: nil,
-            formatDescription: formatDesc,
-            sampleTiming: &timing,
-            sampleBufferOut: &sampleBuffer
-        )
-        
-        guard status == noErr, let buffer = sampleBuffer else { 
-            print("Failed to create sample buffer: \(status)")
-            return 
-        }
-        
-        // Enqueue to display layer on main thread
         DispatchQueue.main.async {
-            if self.displayLayer.status == .failed {
-                print("Display layer failed, flushing...")
-                self.displayLayer.flush()
-            }
-            self.displayLayer.enqueue(buffer)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)  // No animation
+            self.videoLayer.contents = cgImage
+            CATransaction.commit()
             
-            // Debug: log display layer status occasionally
+            // Log resolution on first frame or periodically
             if self.videoFrameCount % 60 == 1 {
-                print("Display layer status: \(self.displayLayer.status.rawValue), isReadyForMoreMediaData: \(self.displayLayer.isReadyForMoreMediaData)")
+                print("Displaying frame \(self.videoFrameCount): \(width)x\(height)")
             }
         }
     }
@@ -798,16 +760,17 @@ struct VideoView: NSViewRepresentable {
 }
 
 struct NetworkVideoView: NSViewRepresentable {
-    let displayLayer: AVSampleBufferDisplayLayer
+    let videoLayer: CALayer
     
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.wantsLayer = true
         view.layer = CALayer()
+        view.layer?.backgroundColor = CGColor(gray: 0, alpha: 1)
         
-        displayLayer.videoGravity = .resizeAspect
-        displayLayer.backgroundColor = CGColor.black
-        view.layer?.addSublayer(displayLayer)
+        videoLayer.contentsGravity = .resizeAspect
+        videoLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
+        view.layer?.addSublayer(videoLayer)
         
         return view
     }
@@ -815,7 +778,7 @@ struct NetworkVideoView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.frame = nsView.bounds
+        videoLayer.frame = nsView.bounds
         CATransaction.commit()
     }
 }
@@ -839,7 +802,7 @@ struct ContentView: View {
                 if kvmController.videoSourceMode == .captureCard {
                     VideoView(session: kvmController.captureSession)
                 } else {
-                    NetworkVideoView(displayLayer: kvmController.displayLayer)
+                    NetworkVideoView(videoLayer: kvmController.videoLayer)
                 }
             }
             .ignoresSafeArea(.all)
