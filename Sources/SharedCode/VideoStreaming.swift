@@ -4,7 +4,12 @@ import CoreMedia
 import CoreVideo
 import QuartzCore
 
-// MARK: - H.264 Encoder
+// MARK: - H.264/HEVC Encoder
+
+public enum VideoCodec {
+    case hevc
+    case h264
+}
 
 public class H264Encoder {
     private var compressionSession: VTCompressionSession?
@@ -13,8 +18,10 @@ public class H264Encoder {
     private let fps: Int32
     private var frameCount: Int64 = 0
     private let startTime = CACurrentMediaTime()
+    public private(set) var activeCodec: VideoCodec = .hevc
     
     public var onEncodedFrame: ((Data, Bool) -> Void)?  // (nalData, isKeyframe)
+    public var onError: ((String) -> Void)?  // Error callback
     
     public init(width: Int32, height: Int32, fps: Int32 = 60) {
         self.width = width
@@ -30,17 +37,53 @@ public class H264Encoder {
     }
     
     private func setupEncoder() {
-        let encoderSpecification: [String: Any] = [
-            kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder as String: true
-        ]
+        // Try HEVC first (hardware), fallback to H.264 if unavailable
+        if tryCreateEncoderSession(codec: .hevc, requireHardware: true) {
+            activeCodec = .hevc
+            return
+        }
+        
+        // Try HEVC with software fallback
+        if tryCreateEncoderSession(codec: .hevc, requireHardware: false) {
+            activeCodec = .hevc
+            print("Using software HEVC encoder")
+            return
+        }
+        
+        // Try H.264 hardware
+        if tryCreateEncoderSession(codec: .h264, requireHardware: true) {
+            activeCodec = .h264
+            print("Fell back to hardware H.264 encoder")
+            return
+        }
+        
+        // Last resort: H.264 software
+        if tryCreateEncoderSession(codec: .h264, requireHardware: false) {
+            activeCodec = .h264
+            print("Using software H.264 encoder")
+            return
+        }
+        
+        let error = "Failed to create any video encoder"
+        print(error)
+        onError?(error)
+    }
+    
+    private func tryCreateEncoderSession(codec: VideoCodec, requireHardware: Bool) -> Bool {
+        var encoderSpec: [String: Any] = [:]
+        if requireHardware {
+            encoderSpec[kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder as String] = true
+        }
+        
+        let codecType: CMVideoCodecType = (codec == .hevc) ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
         
         var session: VTCompressionSession?
         let status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             width: width,
             height: height,
-            codecType: kCMVideoCodecType_HEVC,  // H.265/HEVC - better compression
-            encoderSpecification: encoderSpecification as CFDictionary,
+            codecType: codecType,
+            encoderSpecification: encoderSpec.isEmpty ? nil : encoderSpec as CFDictionary,
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: nil,
@@ -49,33 +92,40 @@ public class H264Encoder {
         )
         
         guard status == noErr, let session = session else {
-            print("Failed to create compression session: \(status)")
-            return
+            return false
         }
         
         compressionSession = session
         
         // Configure for ULTRA LOW LATENCY streaming
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main_AutoLevel)
+        
+        // Set profile based on codec
+        if codec == .hevc {
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main_AutoLevel)
+        } else {
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
+        }
+        
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)  // No B-frames
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps as CFNumber)  // Keyframe every 1 second
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
         
-        // Lower bitrate - HEVC is ~50% more efficient than H.264
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: (50_000_000) as CFNumber)  // 50 Mbps
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: [80_000_000, 1] as CFArray)  // Max 80 Mbps
+        // Bitrate - HEVC is ~50% more efficient than H.264
+        let bitrate = (codec == .hevc) ? 50_000_000 : 75_000_000
+        let maxBitrate = (codec == .hevc) ? 80_000_000 : 120_000_000
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: [maxBitrate, 1] as CFArray)
         
         // Low latency tuning
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowTemporalCompression, value: kCFBooleanTrue)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanFalse)  // Keep quality
-        
-        // Use hardware encoder explicitly
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanFalse)
         
         VTCompressionSessionPrepareToEncodeFrames(session)
-        print("H264 Encoder initialized (low-latency): \(width)x\(height) @ \(fps)fps")
+        let codecName = (codec == .hevc) ? "HEVC" : "H.264"
+        print("\(codecName) Encoder initialized (low-latency): \(width)x\(height) @ \(fps)fps")
+        return true
     }
     
     public func encode(pixelBuffer: CVPixelBuffer) {
@@ -124,39 +174,58 @@ public class H264Encoder {
             isKeyframe = true
         }
         
-        // For keyframes, prepend VPS/SPS/PPS (HEVC has VPS unlike H.264)
+        // For keyframes, prepend parameter sets
         var nalData = Data()
         
         if isKeyframe {
             if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
-                // Get VPS (index 0 for HEVC)
-                var vpsSize: Int = 0
-                var vpsPointer: UnsafePointer<UInt8>?
-                CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(formatDesc, parameterSetIndex: 0, parameterSetPointerOut: &vpsPointer, parameterSetSizeOut: &vpsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
-                
-                if let vps = vpsPointer {
-                    nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])  // Start code
-                    nalData.append(UnsafeBufferPointer(start: vps, count: vpsSize))
-                }
-                
-                // Get SPS (index 1 for HEVC)
-                var spsSize: Int = 0
-                var spsPointer: UnsafePointer<UInt8>?
-                CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(formatDesc, parameterSetIndex: 1, parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
-                
-                if let sps = spsPointer {
-                    nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])  // Start code
-                    nalData.append(UnsafeBufferPointer(start: sps, count: spsSize))
-                }
-                
-                // Get PPS (index 2 for HEVC)
-                var ppsSize: Int = 0
-                var ppsPointer: UnsafePointer<UInt8>?
-                CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(formatDesc, parameterSetIndex: 2, parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
-                
-                if let pps = ppsPointer {
-                    nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])  // Start code
-                    nalData.append(UnsafeBufferPointer(start: pps, count: ppsSize))
+                if activeCodec == .hevc {
+                    // HEVC: VPS/SPS/PPS
+                    var vpsSize: Int = 0
+                    var vpsPointer: UnsafePointer<UInt8>?
+                    CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(formatDesc, parameterSetIndex: 0, parameterSetPointerOut: &vpsPointer, parameterSetSizeOut: &vpsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+                    
+                    if let vps = vpsPointer {
+                        nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+                        nalData.append(UnsafeBufferPointer(start: vps, count: vpsSize))
+                    }
+                    
+                    var spsSize: Int = 0
+                    var spsPointer: UnsafePointer<UInt8>?
+                    CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(formatDesc, parameterSetIndex: 1, parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+                    
+                    if let sps = spsPointer {
+                        nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+                        nalData.append(UnsafeBufferPointer(start: sps, count: spsSize))
+                    }
+                    
+                    var ppsSize: Int = 0
+                    var ppsPointer: UnsafePointer<UInt8>?
+                    CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(formatDesc, parameterSetIndex: 2, parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+                    
+                    if let pps = ppsPointer {
+                        nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+                        nalData.append(UnsafeBufferPointer(start: pps, count: ppsSize))
+                    }
+                } else {
+                    // H.264: SPS/PPS only
+                    var spsSize: Int = 0
+                    var spsPointer: UnsafePointer<UInt8>?
+                    CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, parameterSetIndex: 0, parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+                    
+                    if let sps = spsPointer {
+                        nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+                        nalData.append(UnsafeBufferPointer(start: sps, count: spsSize))
+                    }
+                    
+                    var ppsSize: Int = 0
+                    var ppsPointer: UnsafePointer<UInt8>?
+                    CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, parameterSetIndex: 1, parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+                    
+                    if let pps = ppsPointer {
+                        nalData.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+                        nalData.append(UnsafeBufferPointer(start: pps, count: ppsSize))
+                    }
                 }
             }
         }
@@ -186,14 +255,16 @@ public class H264Encoder {
 
 // MARK: - HEVC Decoder
 
-public class H264Decoder {  // Keep name for compatibility
+public class H264Decoder {  // Keep name for compatibility - handles both H.264 and HEVC
     private var decompressionSession: VTDecompressionSession?
     private var formatDescription: CMVideoFormatDescription?
-    private var vpsData: Data?
+    private var vpsData: Data?  // HEVC only
     private var spsData: Data?
     private var ppsData: Data?
+    private var detectedCodec: VideoCodec?
     
     public var onDecodedFrame: ((CVPixelBuffer, CMTime) -> Void)?
+    public var onError: ((String) -> Void)?
     
     public init() {}
     
@@ -239,76 +310,152 @@ public class H264Decoder {  // Keep name for compatibility
             }
         }
         
-        // Process NAL units in order (HEVC NAL types)
+        // Process NAL units - auto-detect HEVC vs H.264 from NAL types
         for nal in nalUnits {
+            // HEVC NAL types are 0-63, H.264 NAL types are 0-31
+            // HEVC VPS=32, SPS=33, PPS=34 are unique to HEVC
+            // H.264 SPS=7, PPS=8, IDR=5
+            
             switch nal.type {
-            case 32:  // VPS
+            // HEVC parameter sets
+            case 32:  // VPS (HEVC only)
+                detectedCodec = .hevc
                 if vpsData != nal.data {
-                    print("Decoder: Received VPS (\(nal.data.count) bytes)")
+                    print("Decoder: Received HEVC VPS (\(nal.data.count) bytes)")
                     vpsData = nal.data
-                    // Invalidate existing session if VPS changes
-                    if decompressionSession != nil {
-                        VTDecompressionSessionInvalidate(decompressionSession!)
-                        decompressionSession = nil
-                        formatDescription = nil
-                    }
+                    invalidateSession()
                 }
-            case 33:  // SPS
+            case 33:  // SPS (HEVC)
+                detectedCodec = .hevc
                 if spsData != nal.data {
-                    print("Decoder: Received SPS (\(nal.data.count) bytes)")
+                    print("Decoder: Received HEVC SPS (\(nal.data.count) bytes)")
                     spsData = nal.data
                 }
-            case 34:  // PPS
+            case 34:  // PPS (HEVC)
+                detectedCodec = .hevc
                 if ppsData != nal.data {
-                    print("Decoder: Received PPS (\(nal.data.count) bytes)")
+                    print("Decoder: Received HEVC PPS (\(nal.data.count) bytes)")
                     ppsData = nal.data
                 }
-                // Try to create session after receiving PPS (need VPS, SPS, PPS)
                 tryCreateDecompressionSession()
-            case 19, 20:  // IDR_W_RADL, IDR_N_LP (keyframes)
-                tryCreateDecompressionSession()  // Ensure session exists
+                
+            // H.264 parameter sets
+            case 7:  // SPS (H.264)
+                detectedCodec = .h264
+                if spsData != nal.data {
+                    print("Decoder: Received H.264 SPS (\(nal.data.count) bytes)")
+                    spsData = nal.data
+                    invalidateSession()
+                }
+            case 8:  // PPS (H.264)
+                detectedCodec = .h264
+                if ppsData != nal.data {
+                    print("Decoder: Received H.264 PPS (\(nal.data.count) bytes)")
+                    ppsData = nal.data
+                }
+                tryCreateDecompressionSession()
+                
+            // HEVC slice types
+            case 19, 20:  // IDR_W_RADL, IDR_N_LP (HEVC keyframes)
+                tryCreateDecompressionSession()
                 decodeVideoNAL(nal.data, isIDR: true)
-            case 1, 0:  // TRAIL_R, TRAIL_N (non-IDR slices)
+            case 21:  // CRA_NUT (HEVC clean random access - also a keyframe type)
+                tryCreateDecompressionSession()
+                decodeVideoNAL(nal.data, isIDR: true)
+            case 0, 1:  // TRAIL_N, TRAIL_R (HEVC non-IDR)
                 decodeVideoNAL(nal.data, isIDR: false)
+            case 2...9:  // TSA, STSA, RADL, RASL (HEVC slice types)
+                decodeVideoNAL(nal.data, isIDR: false)
+                
+            // H.264 slice types
+            case 5:  // IDR (H.264 keyframe) - only if we detected H.264
+                if detectedCodec == .h264 {
+                    tryCreateDecompressionSession()
+                    decodeVideoNAL(nal.data, isIDR: true)
+                }
+            case 1 where detectedCodec == .h264:  // Non-IDR slice (H.264)
+                decodeVideoNAL(nal.data, isIDR: false)
+                
             default:
-                // Other NAL types (SEI, etc.) - ignore for now
+                // SEI, AUD, etc. - ignore
                 break
             }
         }
     }
     
+    private func invalidateSession() {
+        if decompressionSession != nil {
+            VTDecompressionSessionInvalidate(decompressionSession!)
+            decompressionSession = nil
+            formatDescription = nil
+        }
+    }
+    
     private func tryCreateDecompressionSession() {
-        guard let vps = vpsData, let sps = spsData, let pps = ppsData else { return }
         guard decompressionSession == nil else { return }
-        
-        // Debug: print VPS/SPS/PPS info
-        print("Decoder: VPS (\(vps.count) bytes), SPS (\(sps.count) bytes), PPS (\(pps.count) bytes)")
-        
-        // Convert Data to [UInt8] arrays to get stable pointers
-        let vpsBytes = [UInt8](vps)
-        let spsBytes = [UInt8](sps)
-        let ppsBytes = [UInt8](pps)
+        guard let sps = spsData, let pps = ppsData else { return }
         
         var formatDesc: CMVideoFormatDescription?
-        let status = vpsBytes.withUnsafeBufferPointer { vpsPointer in
-            spsBytes.withUnsafeBufferPointer { spsPointer in
+        var status: OSStatus = noErr
+        
+        if detectedCodec == .hevc {
+            // HEVC requires VPS
+            guard let vps = vpsData else { return }
+            print("Decoder: HEVC VPS (\(vps.count) bytes), SPS (\(sps.count) bytes), PPS (\(pps.count) bytes)")
+            
+            let vpsBytes = [UInt8](vps)
+            let spsBytes = [UInt8](sps)
+            let ppsBytes = [UInt8](pps)
+            
+            status = vpsBytes.withUnsafeBufferPointer { vpsPointer in
+                spsBytes.withUnsafeBufferPointer { spsPointer in
+                    ppsBytes.withUnsafeBufferPointer { ppsPointer in
+                        let parameterSetPointers: [UnsafePointer<UInt8>] = [
+                            vpsPointer.baseAddress!,
+                            spsPointer.baseAddress!,
+                            ppsPointer.baseAddress!
+                        ]
+                        let parameterSetSizes: [Int] = [vpsBytes.count, spsBytes.count, ppsBytes.count]
+                        
+                        return parameterSetPointers.withUnsafeBufferPointer { pointersBuffer in
+                            parameterSetSizes.withUnsafeBufferPointer { sizesBuffer in
+                                CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                                    allocator: kCFAllocatorDefault,
+                                    parameterSetCount: 3,
+                                    parameterSetPointers: pointersBuffer.baseAddress!,
+                                    parameterSetSizes: sizesBuffer.baseAddress!,
+                                    nalUnitHeaderLength: 4,
+                                    extensions: nil,
+                                    formatDescriptionOut: &formatDesc
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // H.264: SPS + PPS only
+            print("Decoder: H.264 SPS (\(sps.count) bytes), PPS (\(pps.count) bytes)")
+            
+            let spsBytes = [UInt8](sps)
+            let ppsBytes = [UInt8](pps)
+            
+            status = spsBytes.withUnsafeBufferPointer { spsPointer in
                 ppsBytes.withUnsafeBufferPointer { ppsPointer in
                     let parameterSetPointers: [UnsafePointer<UInt8>] = [
-                        vpsPointer.baseAddress!,
                         spsPointer.baseAddress!,
                         ppsPointer.baseAddress!
                     ]
-                    let parameterSetSizes: [Int] = [vpsBytes.count, spsBytes.count, ppsBytes.count]
+                    let parameterSetSizes: [Int] = [spsBytes.count, ppsBytes.count]
                     
                     return parameterSetPointers.withUnsafeBufferPointer { pointersBuffer in
                         parameterSetSizes.withUnsafeBufferPointer { sizesBuffer in
-                            CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                            CMVideoFormatDescriptionCreateFromH264ParameterSets(
                                 allocator: kCFAllocatorDefault,
-                                parameterSetCount: 3,
+                                parameterSetCount: 2,
                                 parameterSetPointers: pointersBuffer.baseAddress!,
                                 parameterSetSizes: sizesBuffer.baseAddress!,
                                 nalUnitHeaderLength: 4,
-                                extensions: nil,
                                 formatDescriptionOut: &formatDesc
                             )
                         }
@@ -318,24 +465,30 @@ public class H264Decoder {  // Keep name for compatibility
         }
         
         if status != noErr {
-            print("Failed to create HEVC format description: \(status)")
+            let codecName = (detectedCodec == .hevc) ? "HEVC" : "H.264"
+            let error = "Failed to create \(codecName) format description: \(status)"
+            print(error)
+            onError?(error)
             return
         }
         
         guard let desc = formatDesc else {
-            print("Format description is nil")
+            let error = "Format description is nil"
+            print(error)
+            onError?(error)
             return
         }
         
-        // Debug: print dimensions from format description
         let dimensions = CMVideoFormatDescriptionGetDimensions(desc)
-        print("Decoder: HEVC format description created: \(dimensions.width)x\(dimensions.height)")
+        let codecName = (detectedCodec == .hevc) ? "HEVC" : "H.264"
+        print("Decoder: \(codecName) format description created: \(dimensions.width)x\(dimensions.height)")
         
         formatDescription = desc
         
-        // Decoder specification - prefer hardware but don't require it
+        // Decoder specification - prefer hardware, allow software fallback
         let decoderSpec: [String: Any] = [
-            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true,
+            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String: false  // Allow software fallback
         ]
         
         // Output directly to GPU-compatible buffer for Metal/CALayer display
@@ -356,7 +509,9 @@ public class H264Decoder {  // Keep name for compatibility
         )
         
         guard createStatus == noErr, let session = session else {
-            print("Failed to create decompression session: \(createStatus)")
+            let error = "Failed to create decompression session: \(createStatus)"
+            print(error)
+            onError?(error)
             return
         }
         
@@ -364,7 +519,7 @@ public class H264Decoder {  // Keep name for compatibility
         VTSessionSetProperty(session, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         
         decompressionSession = session
-        print("H264 Decoder initialized")
+        print("\(codecName) Decoder initialized")
     }
     
     private func decodeVideoNAL(_ nalData: Data, isIDR: Bool) {

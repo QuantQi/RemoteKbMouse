@@ -53,6 +53,7 @@ class KVMController: ObservableObject {
     @Published var captureSession = AVCaptureSession()
     @Published var videoSourceMode: VideoSourceMode = .networkStream
     @Published var currentFrame: CGImage?  // Simple CGImage for display
+    @Published var videoError: String?  // Error message for video issues
     
     // Video display layer (for network stream mode)
     let videoLayer = CALayer()
@@ -70,6 +71,8 @@ class KVMController: ObservableObject {
     private var videoFrameBuffer = Data()
     private var expectedFrameSize: UInt32 = 0
     private var frameHeader: VideoFrameHeader?
+    private var consecutiveParseErrors: Int = 0
+    private let maxParseErrorsBeforeResync = 3
     
     // Event Tap
     private var eventTap: CFMachPort?
@@ -105,6 +108,11 @@ class KVMController: ObservableObject {
         decoder = H264Decoder()
         decoder?.onDecodedFrame = { [weak self] pixelBuffer, pts in
             self?.handleDecodedFrame(pixelBuffer)
+        }
+        decoder?.onError = { [weak self] error in
+            DispatchQueue.main.async {
+                self?.videoError = error
+            }
         }
         print("Video decoder initialized")
     }
@@ -338,8 +346,20 @@ class KVMController: ObservableObject {
             let headerData = receiveBuffer.subdata(in: 0..<VideoFrameHeader.headerSize)
             frameHeader = VideoFrameHeader.fromData(headerData)
             
-            guard let header = frameHeader else { return false }
+            guard let header = frameHeader else { 
+                // Invalid header - try to resync
+                tryResyncStream()
+                return false 
+            }
+            
             expectedFrameSize = header.frameSize
+            
+            // Sanity check: frame size should be reasonable (max 10MB for 4K keyframe)
+            if expectedFrameSize == 0 || expectedFrameSize > 10_000_000 {
+                print("Warning: Invalid frame size \(expectedFrameSize), attempting resync")
+                tryResyncStream()
+                return false
+            }
         }
         
         // Check if we have the complete frame
@@ -350,10 +370,18 @@ class KVMController: ObservableObject {
         let frameData = receiveBuffer.subdata(in: VideoFrameHeader.headerSize..<totalNeeded)
         receiveBuffer.removeSubrange(0..<totalNeeded)
         
+        // Reset parse error counter on successful parse
+        consecutiveParseErrors = 0
+        
         videoFrameCount += 1
         let isKeyframe = frameHeader?.isKeyframe ?? false
         if videoFrameCount <= 5 || videoFrameCount % 60 == 0 || isKeyframe {
             print("Received video frame #\(videoFrameCount): \(frameData.count) bytes, keyframe: \(isKeyframe)")
+        }
+        
+        // Clear error on successful frame
+        if videoError != nil {
+            DispatchQueue.main.async { self.videoError = nil }
         }
         
         // Decode the frame
@@ -366,6 +394,29 @@ class KVMController: ObservableObject {
         expectedFrameSize = 0
         
         return true
+    }
+    
+    private func tryResyncStream() {
+        consecutiveParseErrors += 1
+        
+        if consecutiveParseErrors >= maxParseErrorsBeforeResync {
+            print("Too many parse errors, discarding buffer and waiting for next keyframe")
+            receiveBuffer.removeAll()
+            frameHeader = nil
+            expectedFrameSize = 0
+            consecutiveParseErrors = 0
+            return
+        }
+        
+        // Try to find next valid JSON message or start code pattern
+        // Look for '{' (JSON) or 0x00 0x00 0x00 0x01 (NAL start code in raw data - shouldn't appear)
+        frameHeader = nil
+        expectedFrameSize = 0
+        
+        // Skip one byte and try again
+        if !receiveBuffer.isEmpty {
+            receiveBuffer.removeFirst()
+        }
     }
     
     private func handleServerMessage(_ data: Data) {
@@ -809,6 +860,24 @@ struct ContentView: View {
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showControls.toggle()
+                }
+            }
+            
+            // Video error overlay
+            if let error = kvmController.videoError {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text(error)
+                            .font(.caption)
+                    }
+                    .padding(8)
+                    .background(Color.red.opacity(0.8))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                    .padding(.bottom, 60)
                 }
             }
 
