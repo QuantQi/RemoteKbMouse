@@ -9,6 +9,110 @@ import CoreMedia
 import Metal
 import AppKit
 
+// MARK: - Virtual Display Manager (macOS 14+)
+// Note: CGVirtualDisplay is a private API. This implementation uses dynamic loading
+// to access it at runtime. If the API is not available, it falls back gracefully.
+
+@available(macOS 14.0, *)
+class VirtualDisplayManager {
+    // Virtual display state (using Any to avoid compile-time type requirements)
+    private var virtualDisplayObject: AnyObject?
+    private(set) var displayID: CGDirectDisplayID = 0
+    private(set) var displayFrame: CGRect = .zero
+    private(set) var displayMode: DesiredDisplayMode?
+    
+    var isActive: Bool { displayID != 0 }
+    
+    func createDisplay(mode: DesiredDisplayMode) -> Bool {
+        // Clean up existing display first
+        destroyDisplay()
+        
+        // Try to create virtual display using runtime API
+        // CGVirtualDisplay is a private API, so we need to use dynamic loading
+        guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
+              let displayClass = NSClassFromString("CGVirtualDisplay") as? NSObject.Type,
+              let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
+              let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else {
+            print("[VirtualDisplay] CGVirtualDisplay API not available")
+            return false
+        }
+        
+        // Create descriptor
+        let descriptor = descriptorClass.init()
+        descriptor.setValue("RemoteKVM Virtual Display", forKey: "name")
+        descriptor.setValue(mode.width, forKey: "maxPixelsWide")
+        descriptor.setValue(mode.height, forKey: "maxPixelsHigh")
+        descriptor.setValue(CGSize(width: 600, height: 340), forKey: "sizeInMillimeters")
+        descriptor.setValue(0x1234, forKey: "productID")
+        descriptor.setValue(0x5678, forKey: "vendorID")
+        descriptor.setValue(0x0001, forKey: "serialNum")
+        
+        // Create virtual display
+        guard let displayInit = displayClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() as? NSObject,
+              let display = displayInit.perform(NSSelectorFromString("initWithDescriptor:"), with: descriptor)?.takeUnretainedValue() as? NSObject else {
+            print("[VirtualDisplay] Failed to create CGVirtualDisplay instance")
+            return false
+        }
+        
+        // Get display ID
+        guard let displayIDValue = display.value(forKey: "displayID") as? UInt32 else {
+            print("[VirtualDisplay] Failed to get display ID")
+            return false
+        }
+        
+        // Create mode
+        let refreshRate = mode.refreshRate ?? 60
+        let modeObject = modeClass.init()
+        modeObject.setValue(mode.width, forKey: "width")
+        modeObject.setValue(mode.height, forKey: "height")
+        modeObject.setValue(Double(refreshRate), forKey: "refreshRate")
+        
+        // Create settings
+        let settings = settingsClass.init()
+        settings.setValue(1, forKey: "hiDPI") // hiDPIEnabled = 1
+        settings.setValue([modeObject], forKey: "modes")
+        
+        // Apply settings
+        _ = display.perform(NSSelectorFromString("applySettings:"), with: settings)
+        
+        virtualDisplayObject = display
+        displayID = displayIDValue
+        displayMode = mode
+        
+        // Calculate placement: to the right of main display
+        let mainDisplayID = CGMainDisplayID()
+        let mainBounds = CGDisplayBounds(mainDisplayID)
+        let originX = mainBounds.maxX
+        let originY = mainBounds.minY
+        
+        displayFrame = CGRect(
+            x: originX,
+            y: originY,
+            width: CGFloat(mode.width),
+            height: CGFloat(mode.height)
+        )
+        
+        print("[VirtualDisplay] Created: ID=\(displayID), mode=\(mode.width)x\(mode.height)@\(refreshRate)Hz")
+        print("[VirtualDisplay] Frame: \(displayFrame) (placed right of main display)")
+        
+        return true
+    }
+    
+    func destroyDisplay() {
+        guard virtualDisplayObject != nil else { return }
+        
+        print("[VirtualDisplay] Destroying display ID=\(displayID)")
+        virtualDisplayObject = nil
+        displayID = 0
+        displayFrame = .zero
+        displayMode = nil
+    }
+    
+    deinit {
+        destroyDisplay()
+    }
+}
+
 // MARK: - Screen Capturer
 
 @available(macOS 12.3, *)
@@ -17,6 +121,11 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
     private var encoder: H264Encoder?
     private var isStreaming = false
     private let metalDevice: MTLDevice?
+    
+    // Target display configuration
+    private var targetDisplayID: CGDirectDisplayID?
+    private var targetWidth: Int?
+    private var targetHeight: Int?
     
     var onEncodedFrame: ((Data, Bool) -> Void)?  // (data, isKeyframe)
     
@@ -32,19 +141,35 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         }
     }
     
+    /// Configure capture target before starting
+    func configure(displayID: CGDirectDisplayID?, width: Int? = nil, height: Int? = nil) {
+        self.targetDisplayID = displayID
+        self.targetWidth = width
+        self.targetHeight = height
+    }
+    
     func startCapture() async throws {
         // Get available content
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         
-        guard let display = content.displays.first else {
+        // Find target display
+        let display: SCDisplay
+        if let targetID = targetDisplayID,
+           let targetDisplay = content.displays.first(where: { $0.displayID == targetID }) {
+            display = targetDisplay
+            print("[ScreenCapturer] Capturing target display ID=\(targetID)")
+        } else if let mainDisplay = content.displays.first {
+            display = mainDisplay
+            print("[ScreenCapturer] Capturing main display (fallback)")
+        } else {
             print("No display found")
             return
         }
         
-        // Use NATIVE resolution - no scaling, no limits
-        let captureWidth = display.width
-        let captureHeight = display.height
-        // print("Display native resolution: \(captureWidth)x\(captureHeight)")
+        // Use configured dimensions or native resolution
+        let captureWidth = targetWidth ?? display.width
+        let captureHeight = targetHeight ?? display.height
+        print("[ScreenCapturer] Capture resolution: \(captureWidth)x\(captureHeight)")
         
         // Configure stream for MAXIMUM QUALITY + MINIMUM LATENCY
         let config = SCStreamConfiguration()
@@ -70,8 +195,6 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             config.includeChildWindows = true
         }
         
-        // print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (NATIVE, GPU-accelerated, low-latency)")
-        
         // Create encoder with GPU acceleration - native resolution, 100% quality
         encoder = H264Encoder(width: Int32(captureWidth), height: Int32(captureHeight), fps: 60)
         encoder?.onEncodedFrame = { [weak self] data, isKeyframe in
@@ -90,7 +213,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         
         try await stream?.startCapture()
         isStreaming = true
-        // print("Screen capture started (GPU-accelerated)")
+        print("[ScreenCapturer] Screen capture started")
     }
     
     func stopCapture() async {
@@ -406,6 +529,11 @@ class ServerConnection {
     private var frameCount: UInt32 = 0
     private let startTime = CACurrentMediaTime()
     
+    // Virtual display (Any? to avoid availability issues)
+    private var virtualDisplayManager: Any?
+    private var virtualDisplayFrame: DisplayFrame?
+    private var isVirtualDisplayMode: Bool = false
+    
     // Clipboard sync
     private let clipboardSync = ClipboardSyncManager()
     
@@ -436,6 +564,7 @@ class ServerConnection {
             self.stop(error: nil)
         case .ready:
             // print("Connection ready.")
+            sendServerCapabilities()
             sendScreenInfo()
             // Auto-start video streaming
             startVideoStream()
@@ -444,6 +573,13 @@ class ServerConnection {
         default:
             break
         }
+    }
+    
+    private func sendServerCapabilities() {
+        let capabilities = ServerCapabilities.current()
+        let event = RemoteInputEvent.serverCapabilities(capabilities)
+        send(event: event)
+        print("[Server] Sent capabilities: virtualDisplay=\(capabilities.supportsVirtualDisplay), macOS=\(capabilities.macOSVersion)")
     }
     
     private func startClipboardSync() {
@@ -473,12 +609,26 @@ class ServerConnection {
             return
         }
         guard screenCapturer == nil else { return }
-        // print("Starting video stream...")
+        print("[Server] Starting video stream...")
         
         let capturer = ScreenCapturer()
         capturer.onEncodedFrame = { [weak self] data, isKeyframe in
             self?.sendVideoFrame(data: data, isKeyframe: isKeyframe)
         }
+        
+        // Configure for virtual display if active
+        if #available(macOS 14.0, *),
+           let manager = virtualDisplayManager as? VirtualDisplayManager,
+           manager.isActive,
+           let mode = manager.displayMode {
+            capturer.configure(
+                displayID: manager.displayID,
+                width: mode.width,
+                height: mode.height
+            )
+            print("[Server] Configured capturer for virtual display ID=\(manager.displayID)")
+        }
+        
         screenCapturer = capturer
         
         Task {
@@ -490,15 +640,99 @@ class ServerConnection {
         }
     }
     
+    private func handleDesiredDisplayMode(_ mode: DesiredDisplayMode) {
+        print("[Server] Received desired display mode: \(mode.width)x\(mode.height) scale=\(mode.scale)")
+        
+        // Stop current video stream if running
+        stopVideoStream()
+        
+        // Try to create virtual display if supported
+        if #available(macOS 14.0, *) {
+            let manager: VirtualDisplayManager
+            if let existing = virtualDisplayManager as? VirtualDisplayManager {
+                manager = existing
+            } else {
+                manager = VirtualDisplayManager()
+                virtualDisplayManager = manager
+            }
+            
+            if manager.createDisplay(mode: mode) {
+                isVirtualDisplayMode = true
+                virtualDisplayFrame = DisplayFrame(rect: manager.displayFrame)
+                
+                // Send virtual display ready
+                let ready = VirtualDisplayReady(
+                    width: mode.width,
+                    height: mode.height,
+                    scale: mode.scale,
+                    displayID: manager.displayID,
+                    isVirtual: true
+                )
+                send(event: .virtualDisplayReady(ready))
+                
+                // Update screen info to reflect virtual display
+                let screenInfo = ScreenInfoEvent(
+                    width: Double(mode.width),
+                    height: Double(mode.height),
+                    isVirtual: true,
+                    displayID: manager.displayID
+                )
+                send(event: .screenInfo(screenInfo))
+                
+                print("[Server] Virtual display created, starting capture...")
+                
+                // Give the display a moment to register, then start capture
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.startVideoStream()
+                }
+                return
+            } else {
+                print("[Server] Failed to create virtual display, falling back to mirror mode")
+            }
+        } else {
+            print("[Server] Virtual display not supported (requires macOS 14+), using mirror mode")
+        }
+        
+        // Fallback: mirror mode
+        isVirtualDisplayMode = false
+        virtualDisplayFrame = nil
+        
+        let screenSize = getMainScreenSize()
+        let ready = VirtualDisplayReady(
+            width: Int(screenSize.width),
+            height: Int(screenSize.height),
+            scale: 2.0,
+            displayID: CGMainDisplayID(),
+            isVirtual: false
+        )
+        send(event: .virtualDisplayReady(ready))
+        
+        // Send screen info for main display
+        sendScreenInfo()
+        
+        // Restart video stream
+        startVideoStream()
+    }
+    
     private func stopVideoStream() {
         guard #available(macOS 12.3, *) else { return }
         guard let capturer = screenCapturer as? ScreenCapturer else { return }
-        // print("Stopping video stream...")
+        print("[Server] Stopping video stream...")
         screenCapturer = nil
         
         Task {
             await capturer.stopCapture()
         }
+        
+        // Clean up virtual display
+        if #available(macOS 14.0, *) {
+            if let manager = virtualDisplayManager as? VirtualDisplayManager {
+                manager.destroyDisplay()
+            }
+        }
+        virtualDisplayManager = nil
+        virtualDisplayFrame = nil
+        isVirtualDisplayMode = false
     }
     
     private func sendVideoFrame(data: Data, isKeyframe: Bool) {
@@ -530,17 +764,33 @@ class ServerConnection {
     }
     
     private func sendScreenInfo() {
-        let screenSize = getMainScreenSize()
-        let screenInfo = ScreenInfoEvent(width: Double(screenSize.width), height: Double(screenSize.height))
-        let event = RemoteInputEvent.screenInfo(screenInfo)
-        send(event: event)
+        let screenInfo: ScreenInfoEvent
         
-        // print("[EDGE-SERVER] Screen info sent: \(screenSize.width)x\(screenSize.height)")
-        // print("[EDGE-SERVER] EdgeInset=\(EdgeDetectionConfig.edgeInset), Cooldown=\(EdgeDetectionConfig.cooldownSeconds)s")
-        // for (i, screen) in NSScreen.screens.enumerated() {
-        //     print("[EDGE-SERVER] Screen[\(i)]: \(screen.frame) \(screen == NSScreen.main ? "(main)" : "")")
-        // }
-        // fflush(stdout)
+        if #available(macOS 14.0, *),
+           isVirtualDisplayMode,
+           let manager = virtualDisplayManager as? VirtualDisplayManager,
+           let mode = manager.displayMode {
+            // Report virtual display info
+            screenInfo = ScreenInfoEvent(
+                width: Double(mode.width),
+                height: Double(mode.height),
+                isVirtual: true,
+                displayID: manager.displayID
+            )
+            print("[Server] Screen info (virtual): \(mode.width)x\(mode.height), displayID=\(manager.displayID)")
+        } else {
+            // Report main screen info
+            let screenSize = getMainScreenSize()
+            screenInfo = ScreenInfoEvent(
+                width: Double(screenSize.width),
+                height: Double(screenSize.height),
+                isVirtual: false,
+                displayID: CGMainDisplayID()
+            )
+            print("[Server] Screen info (physical): \(screenSize.width)x\(screenSize.height)")
+        }
+        
+        send(event: .screenInfo(screenInfo))
     }
     
     private func sendControlRelease() {
@@ -631,23 +881,23 @@ class ServerConnection {
                 mouseEventCounter += 1
                 isReceivingRemoteInput = true
                 
-                let screenSize = getActiveScreenSize()
+                // Use virtual display frame if active, otherwise use screen size
+                let displayFrame = getActiveDisplayFrame()
                 
-                if let cgEvent = mouseEvent.toCGEvent(screenSize: screenSize) {
+                if let cgEvent = mouseEvent.toCGEvent(displayFrame: displayFrame) {
                     cgEvent.post(tap: .cgSessionEventTap)
-                    checkRightEdge(screenSize: screenSize, deltaX: mouseEvent.deltaX)
+                    checkRightEdge(displayFrame: displayFrame, deltaX: mouseEvent.deltaX)
                 }
                 
             case .warpCursor(let warpEvent):
-                let point = CGPoint(x: warpEvent.x, y: warpEvent.y)
-                // let beforePos = CGEvent(source: nil)?.location ?? .zero
+                // Adjust warp position for virtual display frame
+                let displayFrame = getActiveDisplayFrame()
+                let point = CGPoint(
+                    x: displayFrame.minX + warpEvent.x,
+                    y: displayFrame.minY + warpEvent.y
+                )
                 CGWarpMouseCursorPosition(point)
-                // let afterPos = CGEvent(source: nil)?.location ?? .zero
-                // print("[EDGE-SERVER] ===== WARP CURSOR RECEIVED =====")
-                // print("[EDGE-SERVER] Requested: \(point)")
-                // print("[EDGE-SERVER] Before: \(beforePos) -> After: \(afterPos)")
-                // print("[EDGE-SERVER] Screen size: \(getMainScreenSize())")
-                // fflush(stdout)
+                print("[Server] Warp cursor to: \(point) (virtual frame: \(isVirtualDisplayMode))")
                 // Skip edge checks for 500ms after warp to let mouse events settle
                 warpCursorTime = CACurrentMediaTime()
                 // Show cursor - server now has control
@@ -662,7 +912,11 @@ class ServerConnection {
             case .clipboard(let payload):
                 clipboardSync.apply(payload: payload)
                 
-            case .screenInfo, .controlRelease:
+            case .clientDesiredDisplayMode(let mode):
+                handleDesiredDisplayMode(mode)
+                
+            case .screenInfo, .controlRelease, .virtualDisplayReady, .serverCapabilities:
+                // These are server-to-client events, ignore
                 break
             }
         } catch {
@@ -670,16 +924,29 @@ class ServerConnection {
         }
     }
     
-    private func checkRightEdge(screenSize: CGSize, deltaX: Double = 0) {
+    /// Get the active display frame for mouse clamping and edge detection
+    private func getActiveDisplayFrame() -> DisplayFrame {
+        if isVirtualDisplayMode, let frame = virtualDisplayFrame {
+            return frame
+        }
+        
+        // Fallback to main screen
+        guard let currentPos = CGEvent(source: nil)?.location else {
+            return DisplayFrame(origin: .zero, size: getMainScreenSize())
+        }
+        
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(currentPos) }) {
+            return DisplayFrame(rect: screen.frame)
+        }
+        
+        return DisplayFrame(origin: .zero, size: getMainScreenSize())
+    }
+    
+    private func checkRightEdge(displayFrame: DisplayFrame, deltaX: Double = 0) {
         // Skip edge checks for 500ms after warp to let mouse events settle
         let now = CACurrentMediaTime()
         let timeSinceWarp = now - warpCursorTime
         if timeSinceWarp < 0.5 {
-            // Only log occasionally to avoid spam
-            // if edgeMissLogCounter % 30 == 0 {
-            //     print("[EDGE-SERVER] Skipping edge check (\(String(format: "%.0f", timeSinceWarp * 1000))ms since warp)")
-            //     fflush(stdout)
-            // }
             edgeMissLogCounter += 1
             return
         }
@@ -691,49 +958,16 @@ class ServerConnection {
         let timeSinceLastRelease = now - lastEdgeReleaseTime
         let cooldownPassed = timeSinceLastRelease >= EdgeDetectionConfig.cooldownSeconds
         
-        // Find screen containing cursor
-        let currentScreen = NSScreen.screens.first { screen in
-            let frame = screen.frame
-            return currentPos.x >= frame.minX && currentPos.x <= frame.maxX &&
-                   currentPos.y >= frame.minY && currentPos.y <= frame.maxY
-        } ?? NSScreen.main
-        
-        guard let screen = currentScreen else {
-            return
-        }
-        
-        let screenFrame = screen.frame
-        let rightEdgeThreshold = screenFrame.maxX - EdgeDetectionConfig.edgeInset
-        let isAtRightEdge = currentPos.x >= rightEdgeThreshold
-        
-        // Log when near right edge (within 30 points)
-        // if currentPos.x >= screenFrame.maxX - 30 {
-        //     print("[EDGE-SERVER] Near right: x=\(String(format: "%.1f", currentPos.x)) threshold=\(rightEdgeThreshold) cooldown=\(cooldownPassed)")
-        //     fflush(stdout)
-        // }
+        // Use display frame for edge detection
+        let isAtRightEdge = displayFrame.isAtRightEdge(currentPos.x)
         
         if isAtRightEdge && cooldownPassed {
             lastEdgeReleaseTime = now
-            // print("[EDGE-SERVER] ===== RIGHT EDGE HIT =====")
-            // print("[EDGE-SERVER] cursor: \(currentPos), screen: \(screenFrame)")
-            // fflush(stdout)
+            print("[Server] Right edge hit at x=\(currentPos.x), releasing control")
             sendControlRelease()
         } else {
             edgeMissLogCounter += 1
         }
-    }
-    
-    /// Get screen size for the display containing the cursor, or main display as fallback
-    private func getActiveScreenSize() -> CGSize {
-        guard let currentPos = CGEvent(source: nil)?.location else {
-            return getMainScreenSize()
-        }
-        
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(currentPos) }) {
-            return screen.frame.size
-        }
-        
-        return getMainScreenSize()
     }
     
     private func getMainScreenSize() -> CGSize {
