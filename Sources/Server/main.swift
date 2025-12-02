@@ -413,6 +413,7 @@ class ServerConnection {
     private var edgeMissLogCounter: Int = 0
     private var mouseEventCounter: Int = 0
     private var isReceivingRemoteInput: Bool = false
+    private var skipNextEdgeCheck: Bool = false  // Skip edge check right after warp
 
     init(nwConnection: NWConnection) {
         self.nwConnection = nwConnection
@@ -625,6 +626,8 @@ class ServerConnection {
                 print("[EDGE-SERVER] Before: \(beforePos) -> After: \(afterPos)")
                 print("[EDGE-SERVER] Screen size: \(getMainScreenSize())")
                 fflush(stdout)
+                // Skip the next few edge checks to let the cursor settle
+                skipNextEdgeCheck = true
                 
             case .startVideoStream:
                 startVideoStream()
@@ -644,6 +647,14 @@ class ServerConnection {
     }
     
     private func checkRightEdge(screenSize: CGSize, deltaX: Double = 0) {
+        // Skip edge check right after warp to prevent immediate trigger
+        if skipNextEdgeCheck {
+            skipNextEdgeCheck = false
+            print("[EDGE-SERVER] Skipping edge check (post-warp)")
+            fflush(stdout)
+            return
+        }
+        
         guard let currentPos = CGEvent(source: nil)?.location else {
             return
         }

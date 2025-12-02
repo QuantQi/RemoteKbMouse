@@ -350,7 +350,8 @@ class KVMController: ObservableObject {
         let clampedY = max(screen.frame.minY, min(currentPos.y, screen.frame.maxY))
         let yRatio = (clampedY - screen.frame.minY) / clientScreenSize.height
         let serverY = yRatio * serverScreenSize.height
-        let serverX = serverScreenSize.width - EdgeDetectionConfig.edgeInset
+        // Warp to 20 points inside the right edge to avoid immediate edge trigger
+        let serverX = serverScreenSize.width - 20.0
         
         print("[EDGE-CLIENT] Sending warpCursor to server: (\(serverX), \(serverY))")
         fflush(stdout)
