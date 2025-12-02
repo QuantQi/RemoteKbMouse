@@ -491,11 +491,13 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
             kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder as String: false  // Allow software fallback
         ]
         
-        // Output directly to GPU-compatible buffer for Metal/CALayer display
+        // CRITICAL: Output to IOSurface-backed GPU buffer for zero-copy display
+        // This ensures CVPixelBufferGetIOSurface() always returns a valid surface
         let destImageBufferAttrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferMetalCompatibilityKey as String: true,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any]
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],  // Required for IOSurface backing
+            kCVPixelBufferOpenGLCompatibilityKey as String: true  // Also GPU compatible
         ]
         
         var session: VTDecompressionSession?

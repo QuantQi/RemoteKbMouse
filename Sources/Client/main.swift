@@ -61,7 +61,7 @@ class KVMController: ObservableObject {
     
     // GPU acceleration
     private let metalDevice: MTLDevice?
-    private let ciContext: CIContext
+    private var textureCache: CVMetalTextureCache?
     
     // Networking
     private var browser: NWBrowser?
@@ -92,15 +92,13 @@ class KVMController: ObservableObject {
         // Initialize GPU resources
         metalDevice = MTLCreateSystemDefaultDevice()
         if let device = metalDevice {
-            // Create CIContext with Metal device for GPU-accelerated image processing
-            ciContext = CIContext(mtlDevice: device, options: [
-                .useSoftwareRenderer: false,
-                .cacheIntermediates: false  // Lower latency
-            ])
-            print("GPU: \(device.name) (Metal supported)")
+            // Create texture cache for zero-copy CVPixelBuffer -> Metal texture
+            var cache: CVMetalTextureCache?
+            CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache)
+            textureCache = cache
+            print("GPU: \(device.name) (Metal zero-copy enabled)")
         } else {
-            ciContext = CIContext(options: [.useSoftwareRenderer: false])
-            print("Warning: Metal not available, using default GPU context")
+            print("Warning: Metal not available")
         }
         
         print("KVMController initialized.")
@@ -137,36 +135,23 @@ class KVMController: ObservableObject {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         
-        // Try to use IOSurface for zero-copy GPU display
-        if let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() {
-            DispatchQueue.main.async {
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                self.videoLayer.contents = surface
-                CATransaction.commit()
-                
-                if self.videoFrameCount % 60 == 1 {
-                    print("Displaying frame \(self.videoFrameCount): \(width)x\(height) (IOSurface zero-copy)")
-                }
-            }
+        // Get IOSurface for zero-copy GPU display (decoder is configured to output IOSurface-backed buffers)
+        guard let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() else {
+            // This should never happen if decoder is configured correctly
+            print("Error: CVPixelBuffer is not IOSurface-backed! This causes GPU->CPU->GPU copy.")
             return
         }
         
-        // Fallback: Convert to CGImage using GPU-accelerated CIContext
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
-            print("Failed to create CGImage")
-            return
-        }
-        
+        // Display directly on GPU - no CPU copy!
+        // CALayer.contents accepts IOSurface and composites it directly on GPU
         DispatchQueue.main.async {
             CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            self.videoLayer.contents = cgImage
+            CATransaction.setDisableActions(true)  // No animation
+            self.videoLayer.contents = surface
             CATransaction.commit()
             
             if self.videoFrameCount % 60 == 1 {
-                print("Displaying frame \(self.videoFrameCount): \(width)x\(height) (CGImage fallback)")
+                print("Displaying frame \(self.videoFrameCount): \(width)x\(height) (GPU zero-copy)")
             }
         }
     }
