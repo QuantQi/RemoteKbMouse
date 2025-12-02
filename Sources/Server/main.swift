@@ -26,7 +26,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         super.init()
         
         if let device = metalDevice {
-            print("GPU: \(device.name) (Metal supported)")
+            // print("GPU: \(device.name) (Metal supported)")
         } else {
             print("Warning: Metal not available, using CPU fallback")
         }
@@ -44,7 +44,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         // Use NATIVE resolution - no scaling, no limits
         let captureWidth = display.width
         let captureHeight = display.height
-        print("Display native resolution: \(captureWidth)x\(captureHeight)")
+        // print("Display native resolution: \(captureWidth)x\(captureHeight)")
         
         // Configure stream for MAXIMUM QUALITY + MINIMUM LATENCY
         let config = SCStreamConfiguration()
@@ -70,7 +70,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             config.includeChildWindows = true
         }
         
-        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (NATIVE, GPU-accelerated, low-latency)")
+        // print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (NATIVE, GPU-accelerated, low-latency)")
         
         // Create encoder with GPU acceleration - native resolution, 100% quality
         encoder = H264Encoder(width: Int32(captureWidth), height: Int32(captureHeight), fps: 60)
@@ -90,7 +90,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         
         try await stream?.startCapture()
         isStreaming = true
-        print("Screen capture started (GPU-accelerated)")
+        // print("Screen capture started (GPU-accelerated)")
     }
     
     func stopCapture() async {
@@ -99,7 +99,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         stream = nil
         encoder = nil
         isStreaming = false
-        print("Screen capture stopped")
+        // print("Screen capture stopped")
     }
     
     private var capturedFrameCount: UInt64 = 0
@@ -108,7 +108,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
     // SCStreamOutput
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen else { 
-            print("[CAPTURE] Ignoring non-screen sample buffer, type=\(type)")
+            // print("[CAPTURE] Ignoring non-screen sample buffer, type=\(type)")
             return 
         }
         
@@ -117,7 +117,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         let dataIsReady = CMSampleBufferDataIsReady(sampleBuffer)
         
         if !isValid || !dataIsReady {
-            print("[CAPTURE] Sample buffer not ready: valid=\(isValid), dataReady=\(dataIsReady)")
+            // print("[CAPTURE] Sample buffer not ready: valid=\(isValid), dataReady=\(dataIsReady)")
             return
         }
         
@@ -136,60 +136,61 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
                     // No new frame, screen unchanged - this is normal, don't spam logs
                     return
                 case .blank:
-                    if noPixelBufferCount % 60 == 0 {
-                        print("[CAPTURE] Blank frame (screen may be locked or display off)")
-                    }
+                    // if noPixelBufferCount % 60 == 0 {
+                    //     print("[CAPTURE] Blank frame (screen may be locked or display off)")
+                    // }
                     noPixelBufferCount += 1
                     return
                 case .suspended:
-                    print("[CAPTURE] Capture suspended")
+                    // print("[CAPTURE] Capture suspended")
                     return
                 case .started:
-                    print("[CAPTURE] Stream started notification")
+                    // print("[CAPTURE] Stream started notification")
                     return
                 case .stopped:
-                    print("[CAPTURE] Stream stopped notification")
+                    // print("[CAPTURE] Stream stopped notification")
                     return
                 default:
-                    print("[CAPTURE] Unknown frame status: \(statusRawValue)")
+                    // print("[CAPTURE] Unknown frame status: \(statusRawValue)")
                     // Don't return - try to get pixel buffer anyway
+                    break
                 }
             }
         }
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             noPixelBufferCount += 1
-            if noPixelBufferCount <= 10 || noPixelBufferCount % 100 == 0 {
-                print("[CAPTURE] WARNING: No pixel buffer in sample buffer #\(noPixelBufferCount)")
-                // Debug: print what's in the sample buffer
-                if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
-                    let mediaType = CMFormatDescriptionGetMediaType(formatDesc)
-                    let mediaSubType = CMFormatDescriptionGetMediaSubType(formatDesc)
-                    print("[CAPTURE] Format: mediaType=\(mediaType), subType=\(mediaSubType)")
-                } else {
-                    print("[CAPTURE] No format description")
-                }
-                // Print attachment keys for debugging
-                if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
-                   let attachments = attachmentsArray.first {
-                    print("[CAPTURE] Attachment keys: \(attachments.keys)")
-                }
-            }
+            // if noPixelBufferCount <= 10 || noPixelBufferCount % 100 == 0 {
+            //     print("[CAPTURE] WARNING: No pixel buffer in sample buffer #\(noPixelBufferCount)")
+            //     // Debug: print what's in the sample buffer
+            //     if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
+            //         let mediaType = CMFormatDescriptionGetMediaType(formatDesc)
+            //         let mediaSubType = CMFormatDescriptionGetMediaSubType(formatDesc)
+            //         print("[CAPTURE] Format: mediaType=\(mediaType), subType=\(mediaSubType)")
+            //     } else {
+            //         print("[CAPTURE] No format description")
+            //     }
+            //     // Print attachment keys for debugging
+            //     if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
+            //        let attachments = attachmentsArray.first {
+            //         print("[CAPTURE] Attachment keys: \(attachments.keys)")
+            //     }
+            // }
             return
         }
         
         capturedFrameCount += 1
-        if capturedFrameCount <= 5 || capturedFrameCount % 120 == 0 {
-            let w = CVPixelBufferGetWidth(pixelBuffer)
-            let h = CVPixelBufferGetHeight(pixelBuffer)
-            print("[CAPTURE] ✓ Frame #\(capturedFrameCount): \(w)x\(h)")
-        }
+        // if capturedFrameCount <= 5 || capturedFrameCount % 120 == 0 {
+        //     let w = CVPixelBufferGetWidth(pixelBuffer)
+        //     let h = CVPixelBufferGetHeight(pixelBuffer)
+        //     print("[CAPTURE] ✓ Frame #\(capturedFrameCount): \(w)x\(h)")
+        // }
         encoder?.encode(pixelBuffer: pixelBuffer)
     }
     
     // SCStreamDelegate
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        print("Stream stopped with error: \(error)")
+        // print("Stream stopped with error: \(error)")
         isStreaming = false
     }
 }
@@ -309,11 +310,11 @@ class Server {
     }
 
     private func didAccept(nwConnection: NWConnection) {
-        print("Accepted new connection from \(nwConnection.endpoint)")
+        // print("Accepted new connection from \(nwConnection.endpoint)")
         let connection = ServerConnection(nwConnection: nwConnection)
         connection.didStopCallback = {
             // Handle cleanup if needed when a connection closes
-            print("Connection with \(nwConnection.endpoint) stopped.")
+            // print("Connection with \(nwConnection.endpoint) stopped.")
         }
         connection.start()
     }
@@ -362,7 +363,7 @@ class ClipboardSyncManager {
         )
         
         guard payload.isValid else {
-            print("Clipboard payload too large, skipping (\(text.utf8.count) bytes)")
+            // print("Clipboard payload too large, skipping (\(text.utf8.count) bytes)")
             return
         }
         
@@ -372,7 +373,7 @@ class ClipboardSyncManager {
     func apply(payload: ClipboardPayload) {
         // Ignore invalid or already-applied payloads
         guard payload.isValid else {
-            print("Ignoring invalid clipboard payload")
+            // print("Ignoring invalid clipboard payload")
             return
         }
         
@@ -390,7 +391,7 @@ class ClipboardSyncManager {
         // Update local change count to avoid feedback loop
         lastLocalChangeCount = NSPasteboard.general.changeCount
         
-        print("Applied clipboard payload #\(payload.id) (\(payload.text.count) chars)")
+        // print("Applied clipboard payload #\(payload.id) (\(payload.text.count) chars)")
     }
 }
 
@@ -434,7 +435,7 @@ class ServerConnection {
         case .cancelled:
             self.stop(error: nil)
         case .ready:
-            print("Connection ready.")
+            // print("Connection ready.")
             sendScreenInfo()
             // Auto-start video streaming
             startVideoStream()
@@ -461,7 +462,7 @@ class ServerConnection {
             )
             if payload.isValid {
                 send(event: .clipboard(payload))
-                print("Sent initial clipboard state (\(text.count) chars)")
+                // print("Sent initial clipboard state (\(text.count) chars)")
             }
         }
     }
@@ -472,7 +473,7 @@ class ServerConnection {
             return
         }
         guard screenCapturer == nil else { return }
-        print("Starting video stream...")
+        // print("Starting video stream...")
         
         let capturer = ScreenCapturer()
         capturer.onEncodedFrame = { [weak self] data, isKeyframe in
@@ -492,7 +493,7 @@ class ServerConnection {
     private func stopVideoStream() {
         guard #available(macOS 12.3, *) else { return }
         guard let capturer = screenCapturer as? ScreenCapturer else { return }
-        print("Stopping video stream...")
+        // print("Stopping video stream...")
         screenCapturer = nil
         
         Task {
@@ -502,7 +503,7 @@ class ServerConnection {
     
     private func sendVideoFrame(data: Data, isKeyframe: Bool) {
         guard nwConnection.state == .ready else {
-            print("[SEND] ERROR: Connection not ready, state=\(nwConnection.state)")
+            // print("[SEND] ERROR: Connection not ready, state=\(nwConnection.state)")
             return
         }
         
@@ -514,12 +515,12 @@ class ServerConnection {
         
         frameCount += 1
         
-        if frameCount <= 5 || frameCount % 60 == 0 || isKeyframe {
-            print("[SEND] Frame #\(frameCount): \(frameData.count) bytes (header=\(VideoFrameHeader.headerSize), payload=\(data.count)), keyframe=\(isKeyframe)")
-            // Log header bytes
-            let headerBytes = frameData.prefix(VideoFrameHeader.headerSize).map { String(format: "%02X", $0) }.joined(separator: " ")
-            print("[SEND] Header bytes: \(headerBytes)")
-        }
+        // if frameCount <= 5 || frameCount % 60 == 0 || isKeyframe {
+        //     print("[SEND] Frame #\(frameCount): \(frameData.count) bytes (header=\(VideoFrameHeader.headerSize), payload=\(data.count)), keyframe=\(isKeyframe)")
+        //     // Log header bytes
+        //     let headerBytes = frameData.prefix(VideoFrameHeader.headerSize).map { String(format: "%02X", $0) }.joined(separator: " ")
+        //     print("[SEND] Header bytes: \(headerBytes)")
+        // }
         
         nwConnection.send(content: frameData, completion: .contentProcessed { error in
             if let error = error {
@@ -534,17 +535,17 @@ class ServerConnection {
         let event = RemoteInputEvent.screenInfo(screenInfo)
         send(event: event)
         
-        print("[EDGE-SERVER] Screen info sent: \(screenSize.width)x\(screenSize.height)")
-        print("[EDGE-SERVER] EdgeInset=\(EdgeDetectionConfig.edgeInset), Cooldown=\(EdgeDetectionConfig.cooldownSeconds)s")
-        for (i, screen) in NSScreen.screens.enumerated() {
-            print("[EDGE-SERVER] Screen[\(i)]: \(screen.frame) \(screen == NSScreen.main ? "(main)" : "")")
-        }
-        fflush(stdout)
+        // print("[EDGE-SERVER] Screen info sent: \(screenSize.width)x\(screenSize.height)")
+        // print("[EDGE-SERVER] EdgeInset=\(EdgeDetectionConfig.edgeInset), Cooldown=\(EdgeDetectionConfig.cooldownSeconds)s")
+        // for (i, screen) in NSScreen.screens.enumerated() {
+        //     print("[EDGE-SERVER] Screen[\(i)]: \(screen.frame) \(screen == NSScreen.main ? "(main)" : "")")
+        // }
+        // fflush(stdout)
     }
     
     private func sendControlRelease() {
-        print("[EDGE-SERVER] Sending controlRelease to client")
-        fflush(stdout)
+        // print("[EDGE-SERVER] Sending controlRelease to client")
+        // fflush(stdout)
         let event = RemoteInputEvent.controlRelease
         send(event: event)
         // Hide cursor - client now has control
@@ -557,16 +558,16 @@ class ServerConnection {
         guard !isCursorHidden else { return }
         CGDisplayHideCursor(CGMainDisplayID())
         isCursorHidden = true
-        print("[EDGE-SERVER] Cursor hidden")
-        fflush(stdout)
+        // print("[EDGE-SERVER] Cursor hidden")
+        // fflush(stdout)
     }
     
     private func showCursor() {
         guard isCursorHidden else { return }
         CGDisplayShowCursor(CGMainDisplayID())
         isCursorHidden = false
-        print("[EDGE-SERVER] Cursor shown")
-        fflush(stdout)
+        // print("[EDGE-SERVER] Cursor shown")
+        // fflush(stdout)
     }
     
     private func send(event: RemoteInputEvent) {
@@ -576,7 +577,7 @@ class ServerConnection {
             let framedData = data + ServerConnection.newline
             nwConnection.send(content: framedData, completion: .idempotent)
         } catch {
-            print("Failed to encode event: \(error)")
+            // print("Failed to encode event: \(error)")
         }
     }
     
@@ -639,14 +640,14 @@ class ServerConnection {
                 
             case .warpCursor(let warpEvent):
                 let point = CGPoint(x: warpEvent.x, y: warpEvent.y)
-                let beforePos = CGEvent(source: nil)?.location ?? .zero
+                // let beforePos = CGEvent(source: nil)?.location ?? .zero
                 CGWarpMouseCursorPosition(point)
-                let afterPos = CGEvent(source: nil)?.location ?? .zero
-                print("[EDGE-SERVER] ===== WARP CURSOR RECEIVED =====")
-                print("[EDGE-SERVER] Requested: \(point)")
-                print("[EDGE-SERVER] Before: \(beforePos) -> After: \(afterPos)")
-                print("[EDGE-SERVER] Screen size: \(getMainScreenSize())")
-                fflush(stdout)
+                // let afterPos = CGEvent(source: nil)?.location ?? .zero
+                // print("[EDGE-SERVER] ===== WARP CURSOR RECEIVED =====")
+                // print("[EDGE-SERVER] Requested: \(point)")
+                // print("[EDGE-SERVER] Before: \(beforePos) -> After: \(afterPos)")
+                // print("[EDGE-SERVER] Screen size: \(getMainScreenSize())")
+                // fflush(stdout)
                 // Skip edge checks for 500ms after warp to let mouse events settle
                 warpCursorTime = CACurrentMediaTime()
                 // Show cursor - server now has control
@@ -665,7 +666,7 @@ class ServerConnection {
                 break
             }
         } catch {
-            print("[SERVER] ERROR: Failed to decode: \(error)")
+            // print("[SERVER] ERROR: Failed to decode: \(error)")
         }
     }
     
@@ -675,10 +676,10 @@ class ServerConnection {
         let timeSinceWarp = now - warpCursorTime
         if timeSinceWarp < 0.5 {
             // Only log occasionally to avoid spam
-            if edgeMissLogCounter % 30 == 0 {
-                print("[EDGE-SERVER] Skipping edge check (\(String(format: "%.0f", timeSinceWarp * 1000))ms since warp)")
-                fflush(stdout)
-            }
+            // if edgeMissLogCounter % 30 == 0 {
+            //     print("[EDGE-SERVER] Skipping edge check (\(String(format: "%.0f", timeSinceWarp * 1000))ms since warp)")
+            //     fflush(stdout)
+            // }
             edgeMissLogCounter += 1
             return
         }
@@ -706,16 +707,16 @@ class ServerConnection {
         let isAtRightEdge = currentPos.x >= rightEdgeThreshold
         
         // Log when near right edge (within 30 points)
-        if currentPos.x >= screenFrame.maxX - 30 {
-            print("[EDGE-SERVER] Near right: x=\(String(format: "%.1f", currentPos.x)) threshold=\(rightEdgeThreshold) cooldown=\(cooldownPassed)")
-            fflush(stdout)
-        }
+        // if currentPos.x >= screenFrame.maxX - 30 {
+        //     print("[EDGE-SERVER] Near right: x=\(String(format: "%.1f", currentPos.x)) threshold=\(rightEdgeThreshold) cooldown=\(cooldownPassed)")
+        //     fflush(stdout)
+        // }
         
         if isAtRightEdge && cooldownPassed {
             lastEdgeReleaseTime = now
-            print("[EDGE-SERVER] ===== RIGHT EDGE HIT =====")
-            print("[EDGE-SERVER] cursor: \(currentPos), screen: \(screenFrame)")
-            fflush(stdout)
+            // print("[EDGE-SERVER] ===== RIGHT EDGE HIT =====")
+            // print("[EDGE-SERVER] cursor: \(currentPos), screen: \(screenFrame)")
+            // fflush(stdout)
             sendControlRelease()
         } else {
             edgeMissLogCounter += 1

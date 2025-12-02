@@ -88,7 +88,7 @@ class ClipboardSyncManager {
         )
         
         guard payload.isValid else {
-            print("Clipboard payload too large, skipping (\(text.utf8.count) bytes)")
+            // print("Clipboard payload too large, skipping (\(text.utf8.count) bytes)")
             return
         }
         
@@ -98,7 +98,7 @@ class ClipboardSyncManager {
     func apply(payload: ClipboardPayload) {
         // Ignore invalid or already-applied payloads
         guard payload.isValid else {
-            print("Ignoring invalid clipboard payload")
+            // print("Ignoring invalid clipboard payload")
             return
         }
         
@@ -116,7 +116,7 @@ class ClipboardSyncManager {
         // Update local change count to avoid feedback loop
         lastLocalChangeCount = NSPasteboard.general.changeCount
         
-        print("Applied clipboard payload #\(payload.id) (\(payload.text.count) chars)")
+        // print("Applied clipboard payload #\(payload.id) (\(payload.text.count) chars)")
     }
 }
 
@@ -184,12 +184,12 @@ class KVMController: ObservableObject {
             var cache: CVMetalTextureCache?
             CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache)
             textureCache = cache
-            print("GPU: \(device.name) (Metal zero-copy enabled)")
+            // print("GPU: \(device.name) (Metal zero-copy enabled)")
         } else {
             print("Warning: Metal not available")
         }
         
-        print("KVMController initialized.")
+        // print("KVMController initialized.")
         checkAndCachePermissions()
         
         // Configure video layer
@@ -224,39 +224,39 @@ class KVMController: ObservableObject {
                 self?.videoError = error
             }
         }
-        print("Video decoder initialized")
+        // print("Video decoder initialized")
     }
     
     private var displayedFrameCount: UInt64 = 0
     
     private func handleDecodedFrame(_ pixelBuffer: CVPixelBuffer) {
         displayedFrameCount += 1
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+        // let width = CVPixelBufferGetWidth(pixelBuffer)
+        // let height = CVPixelBufferGetHeight(pixelBuffer)
         
-        print("[DISPLAY] handleDecodedFrame #\(displayedFrameCount): \(width)x\(height)")
+        // print("[DISPLAY] handleDecodedFrame #\(displayedFrameCount): \(width)x\(height)")
         
         // Get IOSurface for zero-copy GPU display (decoder is configured to output IOSurface-backed buffers)
         guard let surfaceRef = CVPixelBufferGetIOSurface(pixelBuffer) else {
-            print("[DISPLAY] ERROR: CVPixelBufferGetIOSurface returned nil!")
+            // print("[DISPLAY] ERROR: CVPixelBufferGetIOSurface returned nil!")
             return
         }
         let surface = surfaceRef.takeUnretainedValue()
-        print("[DISPLAY] Got IOSurface: \(surface)")
+        // print("[DISPLAY] Got IOSurface: \(surface)")
         
         // Display directly on GPU - no CPU copy!
         // CALayer.contents accepts IOSurface and composites it directly on GPU
         DispatchQueue.main.async {
-            print("[DISPLAY] Main thread: setting videoLayer.contents...")
-            print("[DISPLAY] videoLayer frame: \(self.videoLayer.frame), bounds: \(self.videoLayer.bounds)")
-            print("[DISPLAY] videoLayer superlayer: \(String(describing: self.videoLayer.superlayer))")
+            // print("[DISPLAY] Main thread: setting videoLayer.contents...")
+            // print("[DISPLAY] videoLayer frame: \(self.videoLayer.frame), bounds: \(self.videoLayer.bounds)")
+            // print("[DISPLAY] videoLayer superlayer: \(String(describing: self.videoLayer.superlayer))")
             
             CATransaction.begin()
             CATransaction.setDisableActions(true)  // No animation
             self.videoLayer.contents = surface
             CATransaction.commit()
             
-            print("[DISPLAY] Frame #\(self.displayedFrameCount) displayed: \(width)x\(height)")
+            // print("[DISPLAY] Frame #\(self.displayedFrameCount) displayed: \(width)x\(height)")
         }
     }
     
@@ -301,7 +301,7 @@ class KVMController: ObservableObject {
             captureSession.stopRunning()
         }
         
-        print("KVMController resources cleaned up.")
+        // print("KVMController resources cleaned up.")
     }
     
     func toggleRemoteControl() {
@@ -314,36 +314,36 @@ class KVMController: ObservableObject {
         
         // This will trigger the didSet observer
         isControllingRemote.toggle()
-        print("Remote control toggled: \(isControllingRemote)")
-        fflush(stdout)
+        // print("Remote control toggled: \(isControllingRemote)")
+        // fflush(stdout)
     }
     
     /// Enter remote control and warp server cursor to right edge
     private func enterRemoteControl() {
-        print("[EDGE-CLIENT] enterRemoteControl() called")
-        fflush(stdout)
+        // print("[EDGE-CLIENT] enterRemoteControl() called")
+        // fflush(stdout)
         
         guard connection?.state == .ready else {
-            print("[EDGE-CLIENT] ERROR: Connection not ready")
-            fflush(stdout)
+            // print("[EDGE-CLIENT] ERROR: Connection not ready")
+            // fflush(stdout)
             return
         }
         guard !isControllingRemote else {
-            print("[EDGE-CLIENT] WARNING: Already controlling remote")
-            fflush(stdout)
+            // print("[EDGE-CLIENT] WARNING: Already controlling remote")
+            // fflush(stdout)
             return
         }
         
         // Get current cursor position
         let currentPos = CGEvent(source: nil)?.location ?? CGPoint(x: 0, y: NSScreen.main?.frame.midY ?? 500)
-        print("[EDGE-CLIENT] Current cursor: \(currentPos)")
+        // print("[EDGE-CLIENT] Current cursor: \(currentPos)")
         
         // Use main screen for Y mapping since cursor is at edge (may not be "inside" any screen)
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let clientScreenSize = screen.frame.size
         
-        print("[EDGE-CLIENT] Client screen: \(screen.frame)")
-        print("[EDGE-CLIENT] Server screen size: \(serverScreenSize)")
+        // print("[EDGE-CLIENT] Client screen: \(screen.frame)")
+        // print("[EDGE-CLIENT] Server screen size: \(serverScreenSize)")
         
         // Map Y position proportionally from client to server screen
         // Clamp Y to screen bounds for safety
@@ -353,8 +353,8 @@ class KVMController: ObservableObject {
         // Warp to 20 points inside the right edge to avoid immediate edge trigger
         let serverX = serverScreenSize.width - 20.0
         
-        print("[EDGE-CLIENT] Sending warpCursor to server: (\(serverX), \(serverY))")
-        fflush(stdout)
+        // print("[EDGE-CLIENT] Sending warpCursor to server: (\(serverX), \(serverY))")
+        // fflush(stdout)
         
         // Send warp cursor command to server
         let warpEvent = WarpCursorEvent(x: serverX, y: serverY)
@@ -362,8 +362,8 @@ class KVMController: ObservableObject {
         
         // Enter remote control mode
         isControllingRemote = true
-        print("[EDGE-CLIENT] ===== ENTERED REMOTE MODE =====")
-        fflush(stdout)
+        // print("[EDGE-CLIENT] ===== ENTERED REMOTE MODE =====")
+        // fflush(stdout)
     }
     
     // MARK: - Networking
@@ -373,7 +373,7 @@ class KVMController: ObservableObject {
         browser = NWBrowser(for: descriptor, using: .tcp)
         
         browser?.stateUpdateHandler = { [weak self] newState in
-            print("Browser state updated: \(newState)")
+            // print("Browser state updated: \(newState)")
             switch newState {
             case .failed(let error):
                 print("Browser failed with error: \(error). Restarting...")
@@ -384,7 +384,8 @@ class KVMController: ObservableObject {
                     self?.startBrowsing()
                 }
             case .cancelled:
-                print("Browser cancelled.")
+                // print("Browser cancelled.")
+                break
             default:
                 break
             }
@@ -404,20 +405,20 @@ class KVMController: ObservableObject {
             }
         }
         
-        print("Starting Bonjour browser...")
+        // print("Starting Bonjour browser...")
         browser?.start(queue: .main)
     }
     
     private func connect(to endpoint: NWEndpoint) {
-        print("Connecting to server at \(endpoint)...")
+        // print("Connecting to server at \(endpoint)...")
         connection?.cancel()
         
         connection = NWConnection(to: endpoint, using: .tcp)
         connection?.stateUpdateHandler = { [weak self] newState in
-            print("Connection state updated: \(newState)")
+            // print("Connection state updated: \(newState)")
             switch newState {
             case .ready:
-                print("Connection ready.")
+                print("Connected to server.")
                 self?.startReceiving() // Start receiving messages from server
                 self?.clipboardSync.startPolling()
             case .failed, .cancelled:
@@ -449,15 +450,15 @@ class KVMController: ObservableObject {
             
             if let data = data, !data.isEmpty {
                 self.totalBytesReceived += UInt64(data.count)
-                if self.totalBytesReceived <= 10000 || self.videoFrameCount % 60 == 0 {
-                    print("[RECV] Got \(data.count) bytes, total=\(self.totalBytesReceived), buffer=\(self.receiveBuffer.count)")
-                }
+                // if self.totalBytesReceived <= 10000 || self.videoFrameCount % 60 == 0 {
+                //     print("[RECV] Got \(data.count) bytes, total=\(self.totalBytesReceived), buffer=\(self.receiveBuffer.count)")
+                // }
                 self.processReceivedData(data)
                 self.receiveData() // Continue receiving
             }
             
             if isComplete {
-                print("[RECV] Connection complete")
+                // print("[RECV] Connection complete")
             }
             if let error = error {
                 print("[RECV] Connection error: \(error)")
@@ -513,7 +514,7 @@ class KVMController: ObservableObject {
             
             // Sanity check: frame size should be reasonable (max 10MB for 4K keyframe)
             if expectedFrameSize == 0 || expectedFrameSize > 10_000_000 {
-                print("Warning: Invalid frame size \(expectedFrameSize), attempting resync")
+                // print("Warning: Invalid frame size \(expectedFrameSize), attempting resync")
                 tryResyncStream()
                 return false
             }
@@ -534,14 +535,14 @@ class KVMController: ObservableObject {
         let isKeyframe = frameHeader?.isKeyframe ?? false
         
         // Always log first 10 frames, then every 60th, plus all keyframes
-        if videoFrameCount <= 10 || videoFrameCount % 60 == 0 || isKeyframe {
-            print("[FRAME] #\(videoFrameCount): \(frameData.count) bytes, keyframe=\(isKeyframe)")
-            // Log first few bytes to see NAL structure
-            if frameData.count >= 12 {
-                let bytes = frameData.prefix(12).map { String(format: "%02X", $0) }.joined(separator: " ")
-                print("[FRAME] First 12 bytes: \(bytes)")
-            }
-        }
+        // if videoFrameCount <= 10 || videoFrameCount % 60 == 0 || isKeyframe {
+        //     print("[FRAME] #\(videoFrameCount): \(frameData.count) bytes, keyframe=\(isKeyframe)")
+        //     // Log first few bytes to see NAL structure
+        //     if frameData.count >= 12 {
+        //         let bytes = frameData.prefix(12).map { String(format: "%02X", $0) }.joined(separator: " ")
+        //         print("[FRAME] First 12 bytes: \(bytes)")
+        //     }
+        // }
         
         // Clear error on successful frame
         if videoError != nil {
@@ -550,11 +551,11 @@ class KVMController: ObservableObject {
         
         // Decode the frame
         if videoSourceMode == .networkStream {
-            print("[FRAME] Sending \(frameData.count) bytes to decoder...")
+            // print("[FRAME] Sending \(frameData.count) bytes to decoder...")
             decoder?.decode(nalData: frameData)
-            print("[FRAME] Decoder returned")
+            // print("[FRAME] Decoder returned")
         } else {
-            print("[FRAME] WARNING: Not in networkStream mode!")
+            // print("[FRAME] WARNING: Not in networkStream mode!")
         }
         
         // Reset for next frame
@@ -568,7 +569,7 @@ class KVMController: ObservableObject {
         consecutiveParseErrors += 1
         
         if consecutiveParseErrors >= maxParseErrorsBeforeResync {
-            print("Too many parse errors, discarding buffer and waiting for next keyframe")
+            // print("Too many parse errors, discarding buffer and waiting for next keyframe")
             receiveBuffer.removeAll()
             frameHeader = nil
             expectedFrameSize = 0
@@ -596,12 +597,12 @@ class KVMController: ObservableObject {
         switch event {
         case .screenInfo(let info):
             serverScreenSize = CGSize(width: info.width, height: info.height)
-            print("[EDGE-CLIENT] Received server screen size: \(serverScreenSize)")
-            fflush(stdout)
+            // print("[EDGE-CLIENT] Received server screen size: \(serverScreenSize)")
+            // fflush(stdout)
             
         case .controlRelease:
-            print("[EDGE-CLIENT] ===== RECEIVED CONTROL RELEASE =====")
-            fflush(stdout)
+            // print("[EDGE-CLIENT] ===== RECEIVED CONTROL RELEASE =====")
+            // fflush(stdout)
             DispatchQueue.main.async {
                 self.isControllingRemote = false
                 
@@ -611,12 +612,12 @@ class KVMController: ObservableObject {
                     let warpX = screen.frame.minX + EdgeDetectionConfig.edgeInset + 2
                     let warpY = screen.frame.midY
                     CGWarpMouseCursorPosition(CGPoint(x: warpX, y: warpY))
-                    print("[EDGE-CLIENT] Warped local cursor to: (\(warpX), \(warpY))")
+                    // print("[EDGE-CLIENT] Warped local cursor to: (\(warpX), \(warpY))")
                 }
                 
                 self.lastEdgeCrossingTime = CACurrentMediaTime()
-                print("[EDGE-CLIENT] ===== EXITED REMOTE MODE =====")
-                fflush(stdout)
+                // print("[EDGE-CLIENT] ===== EXITED REMOTE MODE =====")
+                // fflush(stdout)
             }
             
         case .clipboard(let payload):
@@ -637,14 +638,14 @@ class KVMController: ObservableObject {
             let framedData = data + "\n".data(using: .utf8)!
             connection?.send(content: framedData, completion: .contentProcessed { [weak self] error in
                 if let error = error {
-                    print("Send failed: \(error). Releasing control.")
+                    // print("Send failed: \(error). Releasing control.")
                     DispatchQueue.main.async {
                         self?.isControllingRemote = false
                     }
                 }
             })
         } catch {
-            print("Failed to encode and send event: \(error)")
+            // print("Failed to encode and send event: \(error)")
         }
     }
     
@@ -652,18 +653,18 @@ class KVMController: ObservableObject {
     
     private func startEventTap() {
         guard eventTap == nil else { return }
-        print("Starting event tap...")
+        // print("Starting event tap...")
         
         // Use cached permission state; re-check without prompting
         // (User was already prompted once at launch)
         if !hasInputMonitoringPermission {
             // Re-check silently in case user granted permission after launch
             hasInputMonitoringPermission = AXIsProcessTrusted()
-            print("Re-checked permission: \(hasInputMonitoringPermission)")
+            // print("Re-checked permission: \(hasInputMonitoringPermission)")
         }
         
         guard hasInputMonitoringPermission else {
-            print("Input Monitoring permission not granted. Cannot start event tap.")
+            // print("Input Monitoring permission not granted. Cannot start event tap.")
             DispatchQueue.main.async { self.isControllingRemote = false }
             return
         }
@@ -717,21 +718,21 @@ class KVMController: ObservableObject {
             return
         }
         
-        print("Event tap created successfully")
-        fflush(stdout)
+        // print("Event tap created successfully")
+        // fflush(stdout)
 
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
         
         // IMPORTANT: Add to MAIN run loop, not current (which might be different in SwiftUI)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
-        print("Event tap enabled and added to main run loop")
-        fflush(stdout)
+        // print("Event tap enabled and added to main run loop")
+        // fflush(stdout)
     }
 
     private func stopEventTap() {
         guard let eventTap = eventTap else { return }
-        print("Stopping event tap.")
+        // print("Stopping event tap.")
         
         CGEvent.tapEnable(tap: eventTap, enable: false)
         if let runLoopSource = runLoopSource {
@@ -770,8 +771,8 @@ class KVMController: ObservableObject {
             CGWarpMouseCursorPosition(self.cursorLockPosition)
         }
         
-        print("Cursor hidden and locked at \(cursorLockPosition)")
-        fflush(stdout)
+        // print("Cursor hidden and locked at \(cursorLockPosition)")
+        // fflush(stdout)
     }
     
     private func showCursorAndUnlock() {
@@ -785,14 +786,14 @@ class KVMController: ObservableObject {
         // Show the cursor
         CGDisplayShowCursor(CGMainDisplayID())
         
-        print("Cursor shown and unlocked")
-        fflush(stdout)
+        // print("Cursor shown and unlocked")
+        // fflush(stdout)
     }
     
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Handle tap disabled event (system can disable taps if they take too long)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            print("Event tap was disabled, re-enabling...")
+            // print("Event tap was disabled, re-enabling...")
             if let eventTap = eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
@@ -868,18 +869,18 @@ class KVMController: ObservableObject {
                 let isAtLeftEdge = location.x <= leftEdgeThreshold
                 
                 // Log when within 30 points of left edge
-                if location.x <= screenFrame.minX + 30 {
-                    print("[EDGE-CLIENT] Near left: x=\(String(format: "%.1f", location.x)) threshold=\(leftEdgeThreshold) dX=\(deltaX) cooldown=\(cooldownPassed)")
-                    fflush(stdout)
-                }
+                // if location.x <= screenFrame.minX + 30 {
+                //     print("[EDGE-CLIENT] Near left: x=\(String(format: "%.1f", location.x)) threshold=\(leftEdgeThreshold) dX=\(deltaX) cooldown=\(cooldownPassed)")
+                //     fflush(stdout)
+                // }
                 
                 // Trigger on left edge
                 if isAtLeftEdge && deltaX <= 0 && cooldownPassed {
                     lastEdgeCrossingTime = now
-                    print("[EDGE-CLIENT] ===== LEFT EDGE HIT =====")
-                    print("[EDGE-CLIENT] location: \(location), deltaX: \(deltaX)")
-                    print("[EDGE-CLIENT] screen: \(screenFrame)")
-                    fflush(stdout)
+                    // print("[EDGE-CLIENT] ===== LEFT EDGE HIT =====")
+                    // print("[EDGE-CLIENT] location: \(location), deltaX: \(deltaX)")
+                    // print("[EDGE-CLIENT] screen: \(screenFrame)")
+                    // fflush(stdout)
                     DispatchQueue.main.async { self.enterRemoteControl() }
                     return nil
                 }
@@ -944,7 +945,7 @@ class KVMController: ObservableObject {
             return
         }
         
-        print("Using video device: \(finalDevice.localizedName)")
+        // print("Using video device: \(finalDevice.localizedName)")
         
         // Configure for highest quality
         captureSession.sessionPreset = .high
@@ -987,12 +988,12 @@ class KVMController: ObservableObject {
                 }
                 
                 let dims = CMVideoFormatDescriptionGetDimensions(bestFormat.formatDescription)
-                print("Video configured: \(dims.width)x\(dims.height) @ \(bestFrameRate) fps")
+                // print("Video configured: \(dims.width)x\(dims.height) @ \(bestFrameRate) fps")
             }
             
             finalDevice.unlockForConfiguration()
         } catch {
-            print("Could not configure video device: \(error)")
+            // print("Could not configure video device: \(error)")
         }
 
         do {
@@ -1011,7 +1012,7 @@ class KVMController: ObservableObject {
             }
             
         } catch {
-            print("Failed to create video device input: \(error)")
+            // print("Failed to create video device input: \(error)")
         }
     }
 }
@@ -1076,7 +1077,7 @@ class NetworkVideoContainerView: NSView {
         videoLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         layer?.addSublayer(videoLayer)
         
-        print("[VIEW] NetworkVideoContainerView created")
+        // print("[VIEW] NetworkVideoContainerView created")
     }
     
     required init?(coder: NSCoder) {
@@ -1094,12 +1095,12 @@ class NetworkVideoContainerView: NSView {
         
         CATransaction.commit()
         
-        print("[VIEW] Layout: view.bounds=\(bounds), videoLayer.frame=\(videoLayer.frame)")
+        // print("[VIEW] Layout: view.bounds=\(bounds), videoLayer.frame=\(videoLayer.frame)")
     }
     
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        print("[VIEW] Moved to window: \(String(describing: window)), bounds=\(bounds)")
+        // print("[VIEW] Moved to window: \(String(describing: window)), bounds=\(bounds)")
         
         // Trigger initial layout
         needsLayout = true
