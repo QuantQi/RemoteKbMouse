@@ -441,6 +441,10 @@ public class H264Decoder {  // Keep name for compatibility
                 print("Decoder: No pixel buffer in callback")
                 return 
             }
+            // Debug: log successful decode
+            let w = CVPixelBufferGetWidth(pixelBuffer)
+            let h = CVPixelBufferGetHeight(pixelBuffer)
+            print("Decoder: Decoded frame \(w)x\(h)")
             self?.onDecodedFrame?(pixelBuffer, pts)
         }
         

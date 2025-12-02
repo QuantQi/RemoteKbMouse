@@ -88,6 +88,15 @@ class KVMController: ObservableObject {
         displayLayer.preventsCapture = false
         displayLayer.preventsDisplaySleepDuringVideoPlayback = true
         
+        // Set up timebase for real-time display (required for AVSampleBufferDisplayLayer)
+        var timebase: CMTimebase?
+        CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &timebase)
+        if let timebase = timebase {
+            CMTimebaseSetRate(timebase, rate: 1.0)
+            CMTimebaseSetTime(timebase, time: .zero)
+            displayLayer.controlTimebase = timebase
+        }
+        
         if videoSourceMode == .captureCard {
             setupVideoCapture()
         } else {
@@ -121,16 +130,17 @@ class KVMController: ObservableObject {
         
         guard let formatDesc = formatDescription else { return }
         
-        // Create timing info
+        // Use current host time for immediate display
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
         var timing = CMSampleTimingInfo(
             duration: CMTime(value: 1, timescale: 60),
-            presentationTimeStamp: CMTime(value: Int64(videoFrameCount), timescale: 60),
+            presentationTimeStamp: now,
             decodeTimeStamp: .invalid
         )
         
         // Create sample buffer
         var sampleBuffer: CMSampleBuffer?
-        CMSampleBufferCreateForImageBuffer(
+        let status = CMSampleBufferCreateForImageBuffer(
             allocator: kCFAllocatorDefault,
             imageBuffer: pixelBuffer,
             dataReady: true,
@@ -141,14 +151,23 @@ class KVMController: ObservableObject {
             sampleBufferOut: &sampleBuffer
         )
         
-        guard let buffer = sampleBuffer else { return }
+        guard status == noErr, let buffer = sampleBuffer else { 
+            print("Failed to create sample buffer: \(status)")
+            return 
+        }
         
         // Enqueue to display layer on main thread
         DispatchQueue.main.async {
             if self.displayLayer.status == .failed {
+                print("Display layer failed, flushing...")
                 self.displayLayer.flush()
             }
             self.displayLayer.enqueue(buffer)
+            
+            // Debug: log display layer status occasionally
+            if self.videoFrameCount % 60 == 1 {
+                print("Display layer status: \(self.displayLayer.status.rawValue), isReadyForMoreMediaData: \(self.displayLayer.isReadyForMoreMediaData)")
+            }
         }
     }
     
