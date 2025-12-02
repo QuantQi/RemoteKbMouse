@@ -7,6 +7,7 @@ import AppKit
 import VideoToolbox
 import CoreMedia
 import IOSurface
+import Metal
 
 // MARK: - Video Source Mode
 
@@ -58,8 +59,9 @@ class KVMController: ObservableObject {
     // Video display layer (for network stream mode)
     let videoLayer = CALayer()
     
-    // CIContext for fast GPU-based image conversion
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    // GPU acceleration
+    private let metalDevice: MTLDevice?
+    private let ciContext: CIContext
     
     // Networking
     private var browser: NWBrowser?
@@ -87,6 +89,20 @@ class KVMController: ObservableObject {
     private var hasInputMonitoringPermission: Bool = false
     
     init() {
+        // Initialize GPU resources
+        metalDevice = MTLCreateSystemDefaultDevice()
+        if let device = metalDevice {
+            // Create CIContext with Metal device for GPU-accelerated image processing
+            ciContext = CIContext(mtlDevice: device, options: [
+                .useSoftwareRenderer: false,
+                .cacheIntermediates: false  // Lower latency
+            ])
+            print("GPU: \(device.name) (Metal supported)")
+        } else {
+            ciContext = CIContext(options: [.useSoftwareRenderer: false])
+            print("Warning: Metal not available, using default GPU context")
+        }
+        
         print("KVMController initialized.")
         checkAndCachePermissions()
         
@@ -121,7 +137,22 @@ class KVMController: ObservableObject {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         
-        // Convert to CGImage using GPU-accelerated CIContext
+        // Try to use IOSurface for zero-copy GPU display
+        if let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() {
+            DispatchQueue.main.async {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self.videoLayer.contents = surface
+                CATransaction.commit()
+                
+                if self.videoFrameCount % 60 == 1 {
+                    print("Displaying frame \(self.videoFrameCount): \(width)x\(height) (IOSurface zero-copy)")
+                }
+            }
+            return
+        }
+        
+        // Fallback: Convert to CGImage using GPU-accelerated CIContext
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
             print("Failed to create CGImage")
@@ -130,13 +161,12 @@ class KVMController: ObservableObject {
         
         DispatchQueue.main.async {
             CATransaction.begin()
-            CATransaction.setDisableActions(true)  // No animation
+            CATransaction.setDisableActions(true)
             self.videoLayer.contents = cgImage
             CATransaction.commit()
             
-            // Log resolution on first frame or periodically
             if self.videoFrameCount % 60 == 1 {
-                print("Displaying frame \(self.videoFrameCount): \(width)x\(height)")
+                print("Displaying frame \(self.videoFrameCount): \(width)x\(height) (CGImage fallback)")
             }
         }
     }
