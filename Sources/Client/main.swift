@@ -170,6 +170,10 @@ class KVMController: ObservableObject {
     // Clipboard sync
     private let clipboardSync = ClipboardSyncManager()
     
+    // Edge detection state
+    private var lastEdgeCrossingTime: TimeInterval = 0
+    private var edgeMissLogCounter: Int = 0
+    
     init() {
         // Initialize GPU resources
         metalDevice = MTLCreateSystemDefaultDevice()
@@ -317,14 +321,29 @@ class KVMController: ObservableObject {
         guard connection?.state == .ready else { return }
         guard !isControllingRemote else { return }
         
-        // Warp server cursor to right edge (at same Y proportion)
-        let clientScreen = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
-        let currentPos = CGEvent(source: nil)?.location ?? CGPoint(x: 0, y: clientScreen.height / 2)
+        // Get current cursor position
+        guard let currentPos = CGEvent(source: nil)?.location else {
+            print("[EDGE] ERROR: Could not get current cursor position")
+            return
+        }
+        
+        // Find the screen containing the cursor for accurate Y mapping
+        let clientScreen = NSScreen.screens.first { screen in
+            screen.frame.contains(currentPos)
+        } ?? NSScreen.main
+        
+        guard let screen = clientScreen else {
+            print("[EDGE] ERROR: Could not find screen for cursor position")
+            return
+        }
+        
+        let clientScreenSize = screen.frame.size
         
         // Map Y position proportionally from client to server screen
-        let yRatio = currentPos.y / clientScreen.height
+        // Note: Y coordinate is relative to the current screen
+        let yRatio = (currentPos.y - screen.frame.minY) / clientScreenSize.height
         let serverY = yRatio * serverScreenSize.height
-        let serverX = serverScreenSize.width - 2 // Right edge, slightly inset
+        let serverX = serverScreenSize.width - EdgeDetectionConfig.edgeInset // Right edge, slightly inset
         
         // Send warp cursor command to server
         let warpEvent = WarpCursorEvent(x: serverX, y: serverY)
@@ -332,7 +351,8 @@ class KVMController: ObservableObject {
         
         // Enter remote control mode
         isControllingRemote = true
-        print("Entered remote control, warped server cursor to (\(serverX), \(serverY))")
+        print("[EDGE] Entered remote control, warped server cursor to (\(serverX), \(serverY))")
+        print("[EDGE]   client screen: \(screen.frame), cursorY: \(currentPos.y), yRatio: \(yRatio)")
         fflush(stdout)
     }
     
@@ -569,8 +589,23 @@ class KVMController: ObservableObject {
             print("Received server screen size: \(serverScreenSize)")
             
         case .controlRelease:
-            print("Server requested control release (right edge hit)")
-            DispatchQueue.main.async { self.isControllingRemote = false }
+            print("[EDGE] Server requested control release (right edge hit)")
+            DispatchQueue.main.async {
+                self.isControllingRemote = false
+                
+                // Warp local cursor slightly inside the left edge to avoid immediate re-trigger
+                // Find the leftmost screen edge
+                let leftmostScreen = NSScreen.screens.min { $0.frame.minX < $1.frame.minX }
+                if let screen = leftmostScreen {
+                    let warpX = screen.frame.minX + EdgeDetectionConfig.edgeInset + 2
+                    let warpY = screen.frame.midY
+                    CGWarpMouseCursorPosition(CGPoint(x: warpX, y: warpY))
+                    print("[EDGE] Warped local cursor to (\(warpX), \(warpY)) after release")
+                }
+                
+                // Reset cooldown to prevent immediate re-entry
+                self.lastEdgeCrossingTime = CACurrentMediaTime()
+            }
             
         case .clipboard(let payload):
             clipboardSync.apply(payload: payload)
@@ -783,15 +818,53 @@ class KVMController: ObservableObject {
         if !isControllingRemote {
             let isMouseMoveEvent = [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
             if isMouseMoveEvent {
+                // Check if we can trigger edge crossing (connection ready + cooldown passed)
+                guard connection?.state == .ready else {
+                    return Unmanaged.passUnretained(event)
+                }
+                
+                let now = CACurrentMediaTime()
+                let cooldownPassed = (now - lastEdgeCrossingTime) >= EdgeDetectionConfig.cooldownSeconds
+                
+                // Get cursor location in points (CGEvent.location is in Quartz coordinates)
                 let location = event.location
                 let deltaX = event.getIntegerValueField(.mouseEventDeltaX)
                 
-                // Cursor at left edge (x <= 0) and trying to move further left (deltaX < 0)
-                if location.x <= 0 && deltaX < 0 && connection?.state == .ready {
-                    print("Left edge detected! Entering remote control.")
+                // Find the display that contains this point
+                // Use NSScreen.screens for multi-monitor support (handles negative origins, Retina, etc.)
+                let display = NSScreen.screens.first { screen in
+                    // NSScreen.frame is in Cocoa coordinates, but CGEvent.location is in Quartz coordinates
+                    // Quartz origin is top-left of main screen, Cocoa origin is bottom-left
+                    // Convert by checking if x is within screen's x range
+                    let frame = screen.frame
+                    return location.x >= frame.minX && location.x <= frame.maxX
+                } ?? NSScreen.main
+                
+                guard let currentScreen = display else {
+                    return Unmanaged.passUnretained(event)
+                }
+                
+                let screenFrame = currentScreen.frame
+                let leftEdgeThreshold = screenFrame.minX + EdgeDetectionConfig.edgeInset
+                let isAtLeftEdge = location.x <= leftEdgeThreshold
+                
+                // Trigger on left edge - allow deltaX <= 0 (moving left or stopped at edge)
+                // deltaX == 0 is common when cursor is pinned at edge
+                if isAtLeftEdge && deltaX <= 0 && cooldownPassed {
+                    lastEdgeCrossingTime = now
+                    print("[EDGE] LEFT EDGE HIT - Entering remote control")
+                    print("[EDGE]   location: \(location), deltaX: \(deltaX)")
+                    print("[EDGE]   screen: \(screenFrame), threshold: \(leftEdgeThreshold)")
                     fflush(stdout)
                     DispatchQueue.main.async { self.enterRemoteControl() }
                     return nil // Consume the event
+                }
+                
+                // Periodic logging for debugging (avoid spam)
+                edgeMissLogCounter += 1
+                if edgeMissLogCounter % EdgeDetectionConfig.logEveryNthMiss == 0 {
+                    print("[EDGE] miss #\(edgeMissLogCounter): loc=\(location), dX=\(deltaX), screen=\(screenFrame.minX)...\(screenFrame.maxX), cooldown=\(cooldownPassed)")
+                    fflush(stdout)
                 }
             }
             return Unmanaged.passUnretained(event)

@@ -407,6 +407,10 @@ class ServerConnection {
     
     // Clipboard sync
     private let clipboardSync = ClipboardSyncManager()
+    
+    // Edge detection state
+    private var lastEdgeReleaseTime: TimeInterval = 0
+    private var edgeMissLogCounter: Int = 0
 
     init(nwConnection: NWConnection) {
         self.nwConnection = nwConnection
@@ -521,17 +525,25 @@ class ServerConnection {
     }
     
     private func sendScreenInfo() {
+        // Send info about the main screen (or could be extended to send all screens)
         let screenSize = getMainScreenSize()
         let screenInfo = ScreenInfoEvent(width: Double(screenSize.width), height: Double(screenSize.height))
         let event = RemoteInputEvent.screenInfo(screenInfo)
         send(event: event)
         print("Sent screen info: \(screenSize.width)x\(screenSize.height)")
+        
+        // Log all available screens for debugging multi-monitor setups
+        print("Available screens:")
+        for (index, screen) in NSScreen.screens.enumerated() {
+            let isMain = screen == NSScreen.main
+            print("  [\(index)] \(screen.frame) \(isMain ? "(main)" : "")")
+        }
     }
     
     private func sendControlRelease() {
         let event = RemoteInputEvent.controlRelease
         send(event: event)
-        print("Sent control release (right edge hit)")
+        print("[EDGE] Sent control release to client")
     }
     
     private func send(event: RemoteInputEvent) {
@@ -593,10 +605,12 @@ class ServerConnection {
                 }
                 
             case .mouse(let mouseEvent):
-                let screenSize = getMainScreenSize()
+                // Use active screen size for multi-monitor support
+                let screenSize = getActiveScreenSize()
                 
                 if let cgEvent = mouseEvent.toCGEvent(screenSize: screenSize) {
                     cgEvent.post(tap: .cgSessionEventTap)
+                    // Check right edge after applying the mouse event
                     checkRightEdge(screenSize: screenSize)
                 } else {
                     print("Failed to convert mouse event to CGEvent")
@@ -605,7 +619,7 @@ class ServerConnection {
             case .warpCursor(let warpEvent):
                 let point = CGPoint(x: warpEvent.x, y: warpEvent.y)
                 CGWarpMouseCursorPosition(point)
-                print("Warped cursor to \(point)")
+                print("[EDGE] Warped cursor to \(point)")
                 
             case .startVideoStream:
                 startVideoStream()
@@ -630,10 +644,53 @@ class ServerConnection {
         // Get current cursor position
         guard let currentPos = CGEvent(source: nil)?.location else { return }
         
-        // Check if cursor hit right edge
-        if currentPos.x >= screenSize.width - 1 {
-            sendControlRelease()
+        let now = CACurrentMediaTime()
+        let cooldownPassed = (now - lastEdgeReleaseTime) >= EdgeDetectionConfig.cooldownSeconds
+        
+        // Find the display that contains this point for multi-monitor support
+        // Use NSScreen.screens to handle negative origins and Retina displays
+        let currentScreen = NSScreen.screens.first { screen in
+            let frame = screen.frame
+            return currentPos.x >= frame.minX && currentPos.x <= frame.maxX &&
+                   currentPos.y >= frame.minY && currentPos.y <= frame.maxY
+        } ?? NSScreen.main
+        
+        guard let screen = currentScreen else {
+            return
         }
+        
+        let screenFrame = screen.frame
+        let rightEdgeThreshold = screenFrame.maxX - EdgeDetectionConfig.edgeInset
+        let isAtRightEdge = currentPos.x >= rightEdgeThreshold
+        
+        // Check if cursor hit right edge with cooldown
+        if isAtRightEdge && cooldownPassed {
+            lastEdgeReleaseTime = now
+            print("[EDGE] RIGHT EDGE HIT - Releasing control to client")
+            print("[EDGE]   location: \(currentPos), threshold: \(rightEdgeThreshold)")
+            print("[EDGE]   screen: \(screenFrame)")
+            sendControlRelease()
+        } else {
+            // Periodic logging for debugging (avoid spam)
+            edgeMissLogCounter += 1
+            if edgeMissLogCounter % EdgeDetectionConfig.logEveryNthMiss == 0 {
+                print("[EDGE] miss #\(edgeMissLogCounter): loc=\(currentPos), screen=\(screenFrame.minX)...\(screenFrame.maxX), cooldown=\(cooldownPassed)")
+            }
+        }
+    }
+    
+    /// Get screen size for the display containing the cursor, or main display as fallback
+    private func getActiveScreenSize() -> CGSize {
+        guard let currentPos = CGEvent(source: nil)?.location else {
+            return getMainScreenSize()
+        }
+        
+        // Find screen containing cursor
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(currentPos) }) {
+            return screen.frame.size
+        }
+        
+        return getMainScreenSize()
     }
     
     private func getMainScreenSize() -> CGSize {

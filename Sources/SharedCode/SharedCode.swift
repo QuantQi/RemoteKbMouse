@@ -7,6 +7,27 @@ public enum NetworkConstants {
     public static let videoServiceType = "_remotekvmvideo._tcp"  // Separate service for video
 }
 
+// MARK: - Edge Detection Configuration
+
+public enum EdgeDetectionConfig {
+    /// Inset in points from screen edge to trigger edge crossing
+    public static let edgeInset: CGFloat = 6.0
+    
+    /// Cooldown in seconds before another edge crossing can be triggered
+    public static let cooldownSeconds: TimeInterval = 0.25
+    
+    /// Logging: only log every Nth miss to avoid spam
+    public static let logEveryNthMiss: Int = 120
+}
+
+// MARK: - Control State
+
+public enum ControlState: String, Codable {
+    case local           // Client has control (no remote input being sent)
+    case remote          // Remote (server) has control (client sending input to server)
+    case pendingRelease  // Server signaled release, waiting for client to acknowledge
+}
+
 // MARK: - Remote Input Event (unified keyboard + mouse)
 
 public enum RemoteInputEvent: Codable {
