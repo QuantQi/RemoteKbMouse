@@ -856,24 +856,61 @@ struct VideoView: NSViewRepresentable {
 struct NetworkVideoView: NSViewRepresentable {
     let videoLayer: CALayer
     
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer = CALayer()
-        view.layer?.backgroundColor = CGColor(gray: 0, alpha: 1)
-        
-        videoLayer.contentsGravity = .resizeAspect
-        videoLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
-        view.layer?.addSublayer(videoLayer)
-        
+    func makeNSView(context: Context) -> NetworkVideoContainerView {
+        let view = NetworkVideoContainerView(videoLayer: videoLayer)
         return view
     }
     
-    func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: NetworkVideoContainerView, context: Context) {
+        // Force layout update
+        nsView.needsLayout = true
+        nsView.layoutSubtreeIfNeeded()
+    }
+}
+
+class NetworkVideoContainerView: NSView {
+    let videoLayer: CALayer
+    
+    init(videoLayer: CALayer) {
+        self.videoLayer = videoLayer
+        super.init(frame: .zero)
+        
+        wantsLayer = true
+        layer = CALayer()
+        layer?.backgroundColor = CGColor(gray: 0, alpha: 1)
+        
+        videoLayer.contentsGravity = .resizeAspect
+        videoLayer.backgroundColor = CGColor(gray: 0.1, alpha: 1)  // Slightly lighter to see if layer is visible
+        videoLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        layer?.addSublayer(videoLayer)
+        
+        print("[VIEW] NetworkVideoContainerView created")
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override func layout() {
+        super.layout()
+        
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        videoLayer.frame = nsView.bounds
+        
+        // Update videoLayer frame to match view bounds
+        videoLayer.frame = bounds
+        
         CATransaction.commit()
+        
+        print("[VIEW] Layout: view.bounds=\(bounds), videoLayer.frame=\(videoLayer.frame)")
+    }
+    
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        print("[VIEW] Moved to window: \(String(describing: window)), bounds=\(bounds)")
+        
+        // Trigger initial layout
+        needsLayout = true
     }
 }
 
