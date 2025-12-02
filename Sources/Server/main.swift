@@ -7,6 +7,7 @@ import ScreenCaptureKit
 import VideoToolbox
 import CoreMedia
 import Metal
+import AppKit
 
 // MARK: - Screen Capturer
 
@@ -318,6 +319,81 @@ class Server {
     }
 }
 
+// MARK: - Clipboard Sync Manager
+
+class ClipboardSyncManager {
+    private var pollingTimer: Timer?
+    private var lastLocalChangeCount: Int = 0
+    private var lastSentId: UInt64 = 0
+    private var lastAppliedId: UInt64 = 0
+    
+    var sendPayload: ((ClipboardPayload) -> Void)?
+    
+    func startPolling() {
+        lastLocalChangeCount = NSPasteboard.general.changeCount
+        
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.poll()
+        }
+    }
+    
+    func stopPolling() {
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+    }
+    
+    private func poll() {
+        let currentChangeCount = NSPasteboard.general.changeCount
+        
+        // Check if pasteboard changed
+        guard currentChangeCount != lastLocalChangeCount else { return }
+        lastLocalChangeCount = currentChangeCount
+        
+        // Get text from pasteboard
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        
+        // Create payload
+        lastSentId += 1
+        let payload = ClipboardPayload(
+            id: lastSentId,
+            kind: .text,
+            text: text,
+            timestamp: Date().timeIntervalSince1970
+        )
+        
+        guard payload.isValid else {
+            print("Clipboard payload too large, skipping (\(text.utf8.count) bytes)")
+            return
+        }
+        
+        sendPayload?(payload)
+    }
+    
+    func apply(payload: ClipboardPayload) {
+        // Ignore invalid or already-applied payloads
+        guard payload.isValid else {
+            print("Ignoring invalid clipboard payload")
+            return
+        }
+        
+        guard payload.id != lastAppliedId else {
+            // Already applied this payload
+            return
+        }
+        
+        lastAppliedId = payload.id
+        
+        // Set pasteboard text
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payload.text, forType: .string)
+        
+        // Update local change count to avoid feedback loop
+        lastLocalChangeCount = NSPasteboard.general.changeCount
+        
+        print("Applied clipboard payload #\(payload.id) (\(payload.text.count) chars)")
+    }
+}
+
 class ServerConnection {
     private static let newline = "\n".data(using: .utf8)!
 
@@ -328,6 +404,9 @@ class ServerConnection {
     private var screenCapturer: Any?
     private var frameCount: UInt32 = 0
     private let startTime = CACurrentMediaTime()
+    
+    // Clipboard sync
+    private let clipboardSync = ClipboardSyncManager()
 
     init(nwConnection: NWConnection) {
         self.nwConnection = nwConnection
@@ -351,8 +430,31 @@ class ServerConnection {
             sendScreenInfo()
             // Auto-start video streaming
             startVideoStream()
+            // Start clipboard sync
+            startClipboardSync()
         default:
             break
+        }
+    }
+    
+    private func startClipboardSync() {
+        clipboardSync.sendPayload = { [weak self] payload in
+            self?.send(event: .clipboard(payload))
+        }
+        clipboardSync.startPolling()
+        
+        // Optionally send initial clipboard state
+        if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
+            let payload = ClipboardPayload(
+                id: 0,
+                kind: .text,
+                text: text,
+                timestamp: Date().timeIntervalSince1970
+            )
+            if payload.isValid {
+                send(event: .clipboard(payload))
+                print("Sent initial clipboard state (\(text.count) chars)")
+            }
         }
     }
     
@@ -511,6 +613,9 @@ class ServerConnection {
             case .stopVideoStream:
                 stopVideoStream()
                 
+            case .clipboard(let payload):
+                clipboardSync.apply(payload: payload)
+                
             case .screenInfo, .controlRelease:
                 // These are server-to-client events, ignore if received
                 break
@@ -540,6 +645,7 @@ class ServerConnection {
 
     private func stop(error: Error?) {
         stopVideoStream()
+        clipboardSync.stopPolling()
         self.nwConnection.stateUpdateHandler = nil
         self.nwConnection.cancel()
         if let didStopCallback = self.didStopCallback {

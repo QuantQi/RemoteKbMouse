@@ -41,6 +41,85 @@ struct ClientApp: App {
     }
 }
 
+// MARK: - Clipboard Sync Manager
+
+class ClipboardSyncManager {
+    private var pollingTimer: Timer?
+    private var lastLocalChangeCount: Int = 0
+    private var lastSentId: UInt64 = 0
+    private var lastAppliedId: UInt64 = 0
+    
+    var sendPayload: ((ClipboardPayload) -> Void)?
+    var shouldSend: (() -> Bool)?
+    
+    func startPolling() {
+        lastLocalChangeCount = NSPasteboard.general.changeCount
+        
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.poll()
+        }
+    }
+    
+    func stopPolling() {
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+    }
+    
+    private func poll() {
+        // Check if we should send (only when controlling remote)
+        guard shouldSend?() == true else { return }
+        
+        let currentChangeCount = NSPasteboard.general.changeCount
+        
+        // Check if pasteboard changed
+        guard currentChangeCount != lastLocalChangeCount else { return }
+        lastLocalChangeCount = currentChangeCount
+        
+        // Get text from pasteboard
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        
+        // Create payload
+        lastSentId += 1
+        let payload = ClipboardPayload(
+            id: lastSentId,
+            kind: .text,
+            text: text,
+            timestamp: Date().timeIntervalSince1970
+        )
+        
+        guard payload.isValid else {
+            print("Clipboard payload too large, skipping (\(text.utf8.count) bytes)")
+            return
+        }
+        
+        sendPayload?(payload)
+    }
+    
+    func apply(payload: ClipboardPayload) {
+        // Ignore invalid or already-applied payloads
+        guard payload.isValid else {
+            print("Ignoring invalid clipboard payload")
+            return
+        }
+        
+        guard payload.id != lastAppliedId else {
+            // Already applied this payload
+            return
+        }
+        
+        lastAppliedId = payload.id
+        
+        // Set pasteboard text
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payload.text, forType: .string)
+        
+        // Update local change count to avoid feedback loop
+        lastLocalChangeCount = NSPasteboard.general.changeCount
+        
+        print("Applied clipboard payload #\(payload.id) (\(payload.text.count) chars)")
+    }
+}
+
 class KVMController: ObservableObject {
     @Published var isControllingRemote: Bool = false {
         didSet {
@@ -88,6 +167,9 @@ class KVMController: ObservableObject {
     // Cached permission state
     private var hasInputMonitoringPermission: Bool = false
     
+    // Clipboard sync
+    private let clipboardSync = ClipboardSyncManager()
+    
     init() {
         // Initialize GPU resources
         metalDevice = MTLCreateSystemDefaultDevice()
@@ -112,6 +194,14 @@ class KVMController: ObservableObject {
             setupVideoCapture()
         } else {
             setupVideoDecoder()
+        }
+        
+        // Configure clipboard sync
+        clipboardSync.sendPayload = { [weak self] payload in
+            self?.send(event: .clipboard(payload))
+        }
+        clipboardSync.shouldSend = { [weak self] in
+            self?.isControllingRemote == true
         }
         
         startBrowsing()
@@ -188,6 +278,9 @@ class KVMController: ObservableObject {
         // Stop cursor lock timer
         cursorLockTimer?.invalidate()
         cursorLockTimer = nil
+        
+        // Stop clipboard sync
+        clipboardSync.stopPolling()
         
         // Stop browsing
         browser?.cancel()
@@ -296,9 +389,11 @@ class KVMController: ObservableObject {
             case .ready:
                 print("Connection ready.")
                 self?.startReceiving() // Start receiving messages from server
+                self?.clipboardSync.startPolling()
             case .failed, .cancelled:
                 print("Connection lost.")
                 self?.connection = nil
+                self?.clipboardSync.stopPolling()
                 DispatchQueue.main.async { self?.isControllingRemote = false }
             default:
                 break
@@ -476,6 +571,9 @@ class KVMController: ObservableObject {
         case .controlRelease:
             print("Server requested control release (right edge hit)")
             DispatchQueue.main.async { self.isControllingRemote = false }
+            
+        case .clipboard(let payload):
+            clipboardSync.apply(payload: payload)
             
         case .keyboard, .mouse, .warpCursor, .startVideoStream, .stopVideoStream:
             // These are client-to-server events, ignore

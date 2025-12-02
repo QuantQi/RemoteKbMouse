@@ -17,6 +17,7 @@ public enum RemoteInputEvent: Codable {
     case warpCursor(WarpCursorEvent)       // Client tells server to warp cursor
     case startVideoStream                  // Client requests video stream
     case stopVideoStream                   // Client stops video stream
+    case clipboard(ClipboardPayload)       // Clipboard sync
 }
 
 // MARK: - Video Frame Header (binary protocol, not JSON)
@@ -51,6 +52,32 @@ public struct VideoFrameHeader {
         let ts = data.subdata(in: 4..<8).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
         let keyframe = data[8] == 1
         return VideoFrameHeader(frameSize: size, timestamp: ts, isKeyframe: keyframe)
+    }
+}
+
+// MARK: - Clipboard Payload
+
+public struct ClipboardPayload: Codable {
+    public enum Kind: String, Codable {
+        case text
+    }
+    
+    public let id: UInt64
+    public let kind: Kind
+    public let text: String
+    public let timestamp: TimeInterval
+    
+    public static let maxTextBytes = 256 * 1024
+    
+    public var isValid: Bool {
+        kind == .text && text.utf8.count <= Self.maxTextBytes
+    }
+    
+    public init(id: UInt64, kind: Kind, text: String, timestamp: TimeInterval) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+        self.timestamp = timestamp
     }
 }
 
