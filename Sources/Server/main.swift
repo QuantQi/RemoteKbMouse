@@ -79,23 +79,37 @@ class VirtualDisplayManager {
         displayID = displayIDValue
         displayMode = mode
         
-        // Calculate placement: to the right of main display
-        let mainDisplayID = CGMainDisplayID()
-        let mainBounds = CGDisplayBounds(mainDisplayID)
-        let originX = mainBounds.maxX
-        let originY = mainBounds.minY
+        // Query the actual display frame from CoreGraphics
+        // This gives us the real position where macOS placed the virtual display
+        displayFrame = CGDisplayBounds(displayIDValue)
         
-        displayFrame = CGRect(
-            x: originX,
-            y: originY,
-            width: CGFloat(mode.width),
-            height: CGFloat(mode.height)
-        )
+        // If CGDisplayBounds returns zero (display not yet registered), estimate position
+        if displayFrame.isEmpty || (displayFrame.width == 0 && displayFrame.height == 0) {
+            let mainDisplayID = CGMainDisplayID()
+            let mainBounds = CGDisplayBounds(mainDisplayID)
+            displayFrame = CGRect(
+                x: mainBounds.maxX,
+                y: mainBounds.minY,
+                width: CGFloat(mode.width),
+                height: CGFloat(mode.height)
+            )
+            print("[VirtualDisplay] Using estimated frame (display not yet registered)")
+        }
         
         print("[VirtualDisplay] Created: ID=\(displayID), mode=\(mode.width)x\(mode.height)@\(refreshRate)Hz")
-        print("[VirtualDisplay] Frame: \(displayFrame) (placed right of main display)")
+        print("[VirtualDisplay] Frame: \(displayFrame)")
         
         return true
+    }
+    
+    /// Refresh the display frame from CoreGraphics (call after display registers)
+    func refreshDisplayFrame() {
+        guard displayID != 0 else { return }
+        let newFrame = CGDisplayBounds(displayID)
+        if !newFrame.isEmpty && newFrame.width > 0 && newFrame.height > 0 {
+            displayFrame = newFrame
+            print("[VirtualDisplay] Refreshed frame: \(displayFrame)")
+        }
     }
     
     func destroyDisplay() {
@@ -157,9 +171,16 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             return
         }
         
-        // Use configured dimensions or native resolution
-        let captureWidth = targetWidth ?? display.width
-        let captureHeight = targetHeight ?? display.height
+        // Use configured dimensions for virtual display, otherwise use display's native resolution
+        let captureWidth: Int
+        let captureHeight: Int
+        if foundVirtualDisplay, let w = targetWidth, let h = targetHeight {
+            captureWidth = w
+            captureHeight = h
+        } else {
+            captureWidth = display.width
+            captureHeight = display.height
+        }
         print("[ScreenCapturer] Capture resolution: \(captureWidth)x\(captureHeight)")
         
         // Configure stream for MAXIMUM QUALITY + MINIMUM LATENCY
@@ -673,9 +694,20 @@ class ServerConnection {
                 
                 print("[Server] Virtual display created, starting capture...")
                 
-                // Give the display a moment to register, then start capture
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.startVideoStream()
+                // Give the display time to register with macOS, then refresh frame and start capture
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    guard let self = self else { return }
+                    
+                    // Refresh the display frame from CoreGraphics now that it's registered
+                    if #available(macOS 14.0, *) {
+                        if let mgr = self.virtualDisplayManager as? VirtualDisplayManager {
+                            mgr.refreshDisplayFrame()
+                            self.virtualDisplayFrame = DisplayFrame(rect: mgr.displayFrame)
+                            print("[Server] Updated virtual display frame: \(mgr.displayFrame)")
+                        }
+                    }
+                    
+                    self.startVideoStream()
                 }
                 return
             } else {

@@ -697,6 +697,8 @@ class KVMController: ObservableObject {
                 } else {
                     self.displayModeInfo = "Mirror mode \(ready.width)x\(ready.height)"
                 }
+                // Update video layer to match virtual display resolution for 1:1 rendering
+                self.updateVideoLayerSize()
             }
             
         case .screenInfo(let info):
@@ -706,6 +708,11 @@ class KVMController: ObservableObject {
             }
             isVirtualDisplayMode = info.isVirtual
             print("[Client] Screen info: \(info.width)x\(info.height), virtual=\(info.isVirtual)")
+            
+            DispatchQueue.main.async {
+                // Update video layer to match new screen size
+                self.updateVideoLayerSize()
+            }
             
         case .controlRelease:
             // print("[EDGE-CLIENT] ===== RECEIVED CONTROL RELEASE =====")
