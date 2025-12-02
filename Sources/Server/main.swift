@@ -118,20 +118,43 @@ class Server {
 
     func start() {
         print("Server starting...")
-        listener.start(queue: .main)
         
-        // Check for accessibility permissions once and cache the result
+        // Check for screen recording permission (required for ScreenCaptureKit)
+        if !CGPreflightScreenCaptureAccess() {
+            print("\n--- SCREEN RECORDING PERMISSION REQUIRED ---")
+            print("Requesting screen recording permission...")
+            let granted = CGRequestScreenCaptureAccess()
+            if !granted {
+                print("⚠️  Screen Recording permission is required to stream the screen.")
+                print("Please go to System Settings > Privacy & Security > Screen Recording")
+                print("and enable it for 'Server', then restart the server.")
+                print("---------------------------------------------\n")
+            } else {
+                print("✓ Screen Recording permission granted.")
+            }
+        } else {
+            print("✓ Screen Recording permission already granted.")
+        }
+        
+        // Check for accessibility permissions (required for keyboard events)
         if !hasAccessibilityPermission {
             let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
             hasAccessibilityPermission = AXIsProcessTrustedWithOptions(options)
 
             if !hasAccessibilityPermission {
-                print("\n--- PERMISSION REQUIRED ---")
-                print("This application needs Accessibility permissions to simulate keyboard events.")
-                print("Please go to System Settings > Privacy & Security > Accessibility and enable it for 'Server'.")
-                print("---------------------------\n")
+                print("\n--- ACCESSIBILITY PERMISSION REQUIRED ---")
+                print("⚠️  This application needs Accessibility permissions to simulate keyboard events.")
+                print("Please go to System Settings > Privacy & Security > Accessibility")
+                print("and enable it for 'Server'.")
+                print("-----------------------------------------\n")
+            } else {
+                print("✓ Accessibility permission granted.")
             }
+        } else {
+            print("✓ Accessibility permission already granted.")
         }
+        
+        listener.start(queue: .main)
     }
     
     /// Creates a new listener instance (required after cancel)
