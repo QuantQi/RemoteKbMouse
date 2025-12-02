@@ -40,51 +40,28 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             return
         }
         
-        let nativeWidth = display.width
-        let nativeHeight = display.height
-        print("Display native resolution: \(nativeWidth)x\(nativeHeight)")
+        // Use NATIVE resolution - no scaling, no limits
+        let captureWidth = display.width
+        let captureHeight = display.height
+        print("Display native resolution: \(captureWidth)x\(captureHeight)")
         
-        // Calculate capture resolution - up to 4K (3840x2160)
-        // Scale down if native is larger than 4K, otherwise use native
-        let max4KWidth = 3840
-        let max4KHeight = 2160
-        
-        let captureWidth: Int
-        let captureHeight: Int
-        
-        if nativeWidth > max4KWidth || nativeHeight > max4KHeight {
-            // Scale down to fit within 4K while maintaining aspect ratio
-            let widthRatio = Double(max4KWidth) / Double(nativeWidth)
-            let heightRatio = Double(max4KHeight) / Double(nativeHeight)
-            let scale = min(widthRatio, heightRatio)
-            captureWidth = Int(Double(nativeWidth) * scale)
-            captureHeight = Int(Double(nativeHeight) * scale)
-            print("Scaling to 4K: \(captureWidth)x\(captureHeight)")
-        } else {
-            // Use native resolution (up to 4K)
-            captureWidth = nativeWidth
-            captureHeight = nativeHeight
-        }
-        
-        // Configure stream for MAXIMUM QUALITY 4K@60Hz
+        // Configure stream for MAXIMUM QUALITY + MINIMUM LATENCY
         let config = SCStreamConfiguration()
         config.width = captureWidth
         config.height = captureHeight
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60)  // 60 fps
         
         // Use hardware-optimal pixel format for encoding
-        // 420YpCbCr8BiPlanarVideoRange is optimal for hardware HEVC encoding
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         
         config.showsCursor = true
-        config.queueDepth = 8  // Buffer for smooth 60fps streaming
+        config.queueDepth = 3  // Lower queue depth = lower latency (was 8)
         
         // High quality color space
-        config.colorSpaceName = CGColorSpace.displayP3  // Wide color gamut
+        config.colorSpaceName = CGColorSpace.displayP3
         
         if #available(macOS 14.0, *) {
-            // Use best resolution available
-            config.captureResolution = .best
+            config.captureResolution = .best  // Best quality
             config.presenterOverlayPrivacyAlertSetting = .never
         }
         
@@ -92,9 +69,9 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             config.includeChildWindows = true
         }
         
-        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (4K max, GPU-accelerated)")
+        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (NATIVE, GPU-accelerated, low-latency)")
         
-        // Create encoder with GPU acceleration - 4K@60Hz settings
+        // Create encoder with GPU acceleration - native resolution, 100% quality
         encoder = H264Encoder(width: Int32(captureWidth), height: Int32(captureHeight), fps: 60)
         encoder?.onEncodedFrame = { [weak self] data, isKeyframe in
             self?.onEncodedFrame?(data, isKeyframe)
