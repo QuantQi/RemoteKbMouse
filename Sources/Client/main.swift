@@ -232,6 +232,27 @@ class KVMController: ObservableObject {
         // print("Video decoder initialized")
     }
     
+    /// Update video layer sizing based on server screen size
+    /// For virtual display mode, we want 1:1 pixel rendering when possible
+    private func updateVideoLayerSize() {
+        // The videoLayer.contentsGravity is already set to .resizeAspect
+        // This will maintain aspect ratio and fit within the view bounds
+        // For true 1:1 rendering, the window should match the virtual display size
+        
+        print("[Client] Video layer target size: \(serverScreenSize.width)x\(serverScreenSize.height), virtual=\(isVirtualDisplayMode)")
+        
+        // If in virtual display mode, we could resize the window to match
+        // For now, just log the expected size - the layer will auto-scale
+        if isVirtualDisplayMode {
+            // Notify that video content size changed (could be used for window auto-resize)
+            NotificationCenter.default.post(
+                name: NSNotification.Name("VideoContentSizeChanged"),
+                object: nil,
+                userInfo: ["width": serverScreenSize.width, "height": serverScreenSize.height]
+            )
+        }
+    }
+    
     private var displayedFrameCount: UInt64 = 0
     
     private func handleDecodedFrame(_ pixelBuffer: CVPixelBuffer) {
@@ -688,6 +709,8 @@ class KVMController: ObservableObject {
                 } else {
                     self.displayModeInfo = "Mirror mode \(ready.width)x\(ready.height)"
                 }
+                // Update video layer to match virtual display resolution for 1:1 rendering
+                self.updateVideoLayerSize()
             }
             
         case .screenInfo(let info):
@@ -697,6 +720,11 @@ class KVMController: ObservableObject {
             }
             isVirtualDisplayMode = info.isVirtual
             print("[Client] Screen info: \(info.width)x\(info.height), virtual=\(info.isVirtual)")
+            
+            DispatchQueue.main.async {
+                // Update video layer to match new screen size
+                self.updateVideoLayerSize()
+            }
             
         case .controlRelease:
             // print("[EDGE-CLIENT] ===== RECEIVED CONTROL RELEASE =====")
