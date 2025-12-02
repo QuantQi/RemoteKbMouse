@@ -63,6 +63,7 @@ class KVMController: ObservableObject {
     
     // Cursor lock position (center of screen)
     private var cursorLockPosition: CGPoint = .zero
+    private var cursorLockTimer: Timer?
     private var controlKeyTapCount: Int = 0
     private var lastControlKeyTime: TimeInterval = 0
     private var lastMagicKeyPressTime: TimeInterval = 0
@@ -97,6 +98,10 @@ class KVMController: ObservableObject {
     /// Clean up all resources
     func stop() {
         stopEventTap()
+        
+        // Stop cursor lock timer
+        cursorLockTimer?.invalidate()
+        cursorLockTimer = nil
         
         // Stop browsing
         browser?.cancel()
@@ -325,11 +330,23 @@ class KVMController: ObservableObject {
         // This prevents the cursor from moving even with mouse input
         CGAssociateMouseAndMouseCursorPosition(0)
         
+        // Start a timer to continuously enforce cursor lock
+        // This ensures cursor stays locked even when app loses focus
+        cursorLockTimer?.invalidate()
+        cursorLockTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+            guard let self = self, self.isControllingRemote else { return }
+            CGWarpMouseCursorPosition(self.cursorLockPosition)
+        }
+        
         print("Cursor hidden and locked at \(cursorLockPosition)")
         fflush(stdout)
     }
     
     private func showCursorAndUnlock() {
+        // Stop the cursor lock timer
+        cursorLockTimer?.invalidate()
+        cursorLockTimer = nil
+        
         // Re-associate mouse and cursor
         CGAssociateMouseAndMouseCursorPosition(1)
         
