@@ -184,43 +184,66 @@ public class H264Decoder {
     }
     
     public func decode(nalData: Data) {
-        // Parse NAL units
-        var offset = 0
+        // Parse NAL units with Annex B start codes (0x00 0x00 0x00 0x01)
         var nalUnits: [(type: UInt8, data: Data)] = []
+        var i = 0
         
-        while offset < nalData.count - 4 {
-            // Find start code
-            if nalData[offset] == 0 && nalData[offset + 1] == 0 && nalData[offset + 2] == 0 && nalData[offset + 3] == 1 {
-                // Find next start code or end
-                var nextStart = offset + 4
-                while nextStart < nalData.count - 3 {
-                    if nalData[nextStart] == 0 && nalData[nextStart + 1] == 0 && nalData[nextStart + 2] == 0 && nalData[nextStart + 3] == 1 {
+        while i < nalData.count {
+            // Find start code (0x00 0x00 0x00 0x01)
+            if i + 4 <= nalData.count &&
+               nalData[i] == 0 && nalData[i + 1] == 0 && 
+               nalData[i + 2] == 0 && nalData[i + 3] == 1 {
+                
+                let nalStart = i + 4  // After start code
+                
+                // Find next start code or end of data
+                var nalEnd = nalData.count
+                for j in nalStart..<(nalData.count - 3) {
+                    if nalData[j] == 0 && nalData[j + 1] == 0 && 
+                       nalData[j + 2] == 0 && nalData[j + 3] == 1 {
+                        nalEnd = j
                         break
                     }
-                    nextStart += 1
                 }
                 
-                let nalType = nalData[offset + 4] & 0x1F
-                let nalDataSlice = nalData.subdata(in: (offset + 4)..<nextStart)
-                nalUnits.append((nalType, nalDataSlice))
-                offset = nextStart
+                if nalStart < nalEnd {
+                    let nalType = nalData[nalStart] & 0x1F
+                    let nalDataSlice = nalData.subdata(in: nalStart..<nalEnd)
+                    nalUnits.append((nalType, nalDataSlice))
+                }
+                
+                i = nalEnd
             } else {
-                offset += 1
+                i += 1
             }
         }
         
+        // Process NAL units in order
         for nal in nalUnits {
             switch nal.type {
             case 7:  // SPS
-                print("Decoder: Received SPS (\(nal.data.count) bytes)")
-                spsData = nal.data
-                tryCreateDecompressionSession()
+                if spsData != nal.data {
+                    print("Decoder: Received SPS (\(nal.data.count) bytes)")
+                    spsData = nal.data
+                    // Invalidate existing session if SPS changes
+                    if decompressionSession != nil {
+                        VTDecompressionSessionInvalidate(decompressionSession!)
+                        decompressionSession = nil
+                        formatDescription = nil
+                    }
+                }
             case 8:  // PPS
-                print("Decoder: Received PPS (\(nal.data.count) bytes)")
-                ppsData = nal.data
+                if ppsData != nal.data {
+                    print("Decoder: Received PPS (\(nal.data.count) bytes)")
+                    ppsData = nal.data
+                }
+                // Try to create session after receiving PPS (need both SPS and PPS)
                 tryCreateDecompressionSession()
-            case 5, 1:  // IDR or non-IDR slice
-                decodeVideoNAL(nal.data)
+            case 5:  // IDR (keyframe)
+                tryCreateDecompressionSession()  // Ensure session exists
+                decodeVideoNAL(nal.data, isIDR: true)
+            case 1:  // Non-IDR slice
+                decodeVideoNAL(nal.data, isIDR: false)
             default:
                 break
             }
@@ -294,8 +317,13 @@ public class H264Decoder {
         print("H264 Decoder initialized")
     }
     
-    private func decodeVideoNAL(_ nalData: Data) {
-        guard let session = decompressionSession, let formatDesc = formatDescription else { return }
+    private func decodeVideoNAL(_ nalData: Data, isIDR: Bool) {
+        guard let session = decompressionSession, let formatDesc = formatDescription else { 
+            if isIDR {
+                print("Decoder: Cannot decode IDR - no session")
+            }
+            return 
+        }
         
         // Convert to AVCC format (length-prefixed)
         var length = UInt32(nalData.count).bigEndian
@@ -351,12 +379,23 @@ public class H264Decoder {
         
         guard let sample = sampleBuffer else { return }
         
-        let flags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
+        let flags: VTDecodeFrameFlags = []  // Synchronous decode
         var infoFlags: VTDecodeInfoFlags = []
         
-        VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: flags, infoFlagsOut: &infoFlags) { [weak self] status, flags, imageBuffer, pts, duration in
-            guard status == noErr, let pixelBuffer = imageBuffer else { return }
+        let decodeStatus = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: flags, infoFlagsOut: &infoFlags) { [weak self] status, flags, imageBuffer, pts, duration in
+            if status != noErr {
+                print("Decoder: Frame decode callback error: \(status)")
+                return
+            }
+            guard let pixelBuffer = imageBuffer else { 
+                print("Decoder: No pixel buffer in callback")
+                return 
+            }
             self?.onDecodedFrame?(pixelBuffer, pts)
+        }
+        
+        if decodeStatus != noErr {
+            print("Decoder: VTDecompressionSessionDecodeFrame error: \(decodeStatus)")
         }
     }
 }

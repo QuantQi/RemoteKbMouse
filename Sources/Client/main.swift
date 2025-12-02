@@ -99,9 +99,32 @@ class KVMController: ObservableObject {
     }
     
     private func handleDecodedFrame(_ pixelBuffer: CVPixelBuffer) {
+        // Debug: Check pixel buffer format
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        
+        // Log occasionally
+        if videoFrameCount % 120 == 1 {
+            let formatStr: String
+            switch pixelFormat {
+            case kCVPixelFormatType_32BGRA: formatStr = "BGRA"
+            case kCVPixelFormatType_32ARGB: formatStr = "ARGB"
+            case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange: formatStr = "420v"
+            case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange: formatStr = "420f"
+            default: formatStr = String(format: "0x%08X", pixelFormat)
+            }
+            print("Decoded frame: \(width)x\(height), format: \(formatStr)")
+        }
+        
         // Convert to CGImage for display
         var cgImage: CGImage?
-        VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
+        let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &cgImage)
+        
+        if status != noErr {
+            print("VTCreateCGImageFromCVPixelBuffer failed: \(status)")
+            return
+        }
         
         if let image = cgImage {
             DispatchQueue.main.async {
