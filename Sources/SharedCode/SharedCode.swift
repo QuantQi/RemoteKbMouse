@@ -236,10 +236,10 @@ public struct RemoteMouseEvent: Codable {
         let clampedX = max(0, min(newX, Double(screenSize.width) - 1))
         let clampedY = max(0, min(newY, Double(screenSize.height) - 1))
         
-        // Log if clamping occurred (cursor hit edge)
-        if newX != clampedX || newY != clampedY {
-            print("[MOUSE] CLAMPED: (\\(String(format: \"%.1f\", newX)), \\(String(format: \"%.1f\", newY))) -> (\\(String(format: \"%.1f\", clampedX)), \\(String(format: \"%.1f\", clampedY))), screen=\\(screenSize)")
-        }
+        // // Log if clamping occurred (cursor hit edge)
+        // if newX != clampedX || newY != clampedY {
+        //     print("[MOUSE] CLAMPED: (\\(String(format: \"%.1f\", newX)), \\(String(format: \"%.1f\", newY))) -> (\\(String(format: \"%.1f\", clampedX)), \\(String(format: \"%.1f\", clampedY))), screen=\\(screenSize)")
+        // }
         
         newX = clampedX
         newY = clampedY

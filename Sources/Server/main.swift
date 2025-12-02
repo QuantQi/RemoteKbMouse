@@ -527,33 +527,24 @@ class ServerConnection {
     }
     
     private func sendScreenInfo() {
-        // Send info about the main screen (or could be extended to send all screens)
         let screenSize = getMainScreenSize()
         let screenInfo = ScreenInfoEvent(width: Double(screenSize.width), height: Double(screenSize.height))
         let event = RemoteInputEvent.screenInfo(screenInfo)
         send(event: event)
         
-        print("")
-        print("[SERVER] ========== SCREEN INFO SENT ==========")
-        print("[SERVER] Main screen size: \(screenSize.width)x\(screenSize.height)")
-        print("[SERVER] EdgeDetectionConfig.edgeInset: \(EdgeDetectionConfig.edgeInset)")
-        print("[SERVER] EdgeDetectionConfig.cooldownSeconds: \(EdgeDetectionConfig.cooldownSeconds)")
-        print("[SERVER] Available screens:")
-        for (index, screen) in NSScreen.screens.enumerated() {
-            let isMain = screen == NSScreen.main
-            print("[SERVER]   [\(index)] frame=\(screen.frame), visibleFrame=\(screen.visibleFrame) \(isMain ? "(MAIN)" : "")")
+        print("[EDGE-SERVER] Screen info sent: \(screenSize.width)x\(screenSize.height)")
+        print("[EDGE-SERVER] EdgeInset=\(EdgeDetectionConfig.edgeInset), Cooldown=\(EdgeDetectionConfig.cooldownSeconds)s")
+        for (i, screen) in NSScreen.screens.enumerated() {
+            print("[EDGE-SERVER] Screen[\(i)]: \(screen.frame) \(screen == NSScreen.main ? "(main)" : "")")
         }
-        print("[SERVER] ============================================")
-        print("")
         fflush(stdout)
     }
     
     private func sendControlRelease() {
-        print("[SERVER] Sending controlRelease event to client...")
+        print("[EDGE-SERVER] Sending controlRelease to client")
+        fflush(stdout)
         let event = RemoteInputEvent.controlRelease
         send(event: event)
-        print("[SERVER] controlRelease event sent successfully")
-        fflush(stdout)
     }
     
     private func send(event: RemoteInputEvent) {
@@ -608,74 +599,52 @@ class ServerConnection {
             
             switch inputEvent {
             case .keyboard(let keyboardEvent):
-                print("[SERVER] Received keyboard: keyCode=\(keyboardEvent.keyCode), type=\(keyboardEvent.eventType)")
+                // print("[SERVER] Received keyboard: keyCode=\(keyboardEvent.keyCode)")
                 if let cgEvent = keyboardEvent.toCGEvent() {
                     cgEvent.post(tap: .cgSessionEventTap)
-                    print("[SERVER] Posted keyboard event")
-                } else {
-                    print("[SERVER] ERROR: Failed to convert keyboard event to CGEvent")
                 }
                 
             case .mouse(let mouseEvent):
                 mouseEventCounter += 1
                 isReceivingRemoteInput = true
                 
-                // Use active screen size for multi-monitor support
                 let screenSize = getActiveScreenSize()
-                
-                // Log every 60th mouse event
-                if mouseEventCounter % 60 == 1 {
-                    print("[SERVER] Mouse #\(mouseEventCounter): delta=(\(mouseEvent.deltaX), \(mouseEvent.deltaY)), type=\(mouseEvent.eventType), screenSize=\(screenSize)")
-                    fflush(stdout)
-                }
                 
                 if let cgEvent = mouseEvent.toCGEvent(screenSize: screenSize) {
                     cgEvent.post(tap: .cgSessionEventTap)
-                    // Check right edge after applying the mouse event
                     checkRightEdge(screenSize: screenSize, deltaX: mouseEvent.deltaX)
-                } else {
-                    print("[SERVER] ERROR: Failed to convert mouse event to CGEvent")
                 }
                 
             case .warpCursor(let warpEvent):
                 let point = CGPoint(x: warpEvent.x, y: warpEvent.y)
-                print("")
-                print("[SERVER] ========== WARP CURSOR RECEIVED ==========")
-                print("[SERVER] Warping cursor to: \(point)")
-                print("[SERVER] Current cursor before warp: \(CGEvent(source: nil)?.location ?? .zero)")
+                let beforePos = CGEvent(source: nil)?.location ?? .zero
                 CGWarpMouseCursorPosition(point)
-                print("[SERVER] Current cursor after warp: \(CGEvent(source: nil)?.location ?? .zero)")
-                print("[SERVER] ===============================================")
-                print("")
+                let afterPos = CGEvent(source: nil)?.location ?? .zero
+                print("[EDGE-SERVER] ===== WARP CURSOR RECEIVED =====")
+                print("[EDGE-SERVER] Requested: \(point)")
+                print("[EDGE-SERVER] Before: \(beforePos) -> After: \(afterPos)")
+                print("[EDGE-SERVER] Screen size: \(getMainScreenSize())")
                 fflush(stdout)
                 
             case .startVideoStream:
-                print("[SERVER] Received startVideoStream")
                 startVideoStream()
                 
             case .stopVideoStream:
-                print("[SERVER] Received stopVideoStream")
                 stopVideoStream()
                 
             case .clipboard(let payload):
-                print("[SERVER] Received clipboard: \(payload.text.count) chars")
                 clipboardSync.apply(payload: payload)
                 
             case .screenInfo, .controlRelease:
-                // These are server-to-client events, ignore if received
-                print("[SERVER] WARNING: Received server-to-client event, ignoring")
                 break
             }
         } catch {
-            print("[SERVER] ERROR: Failed to decode RemoteInputEvent: \(error)")
-            print("[SERVER] Raw data: \(String(data: data, encoding: .utf8) ?? "non-utf8")")
+            print("[SERVER] ERROR: Failed to decode: \(error)")
         }
     }
     
     private func checkRightEdge(screenSize: CGSize, deltaX: Double = 0) {
-        // Get current cursor position
         guard let currentPos = CGEvent(source: nil)?.location else {
-            print("[SERVER] ERROR: Could not get cursor position for edge check")
             return
         }
         
@@ -683,23 +652,14 @@ class ServerConnection {
         let timeSinceLastRelease = now - lastEdgeReleaseTime
         let cooldownPassed = timeSinceLastRelease >= EdgeDetectionConfig.cooldownSeconds
         
-        // Log every 60th check
-        if edgeMissLogCounter % 60 == 0 {
-            print("[SERVER] Edge check #\(edgeMissLogCounter): cursor=(\(String(format: "%.1f", currentPos.x)), \(String(format: "%.1f", currentPos.y))), dX=\(deltaX)")
-            fflush(stdout)
-        }
-        
-        // Find the display that contains this point for multi-monitor support
-        // Use NSScreen.screens to handle negative origins and Retina displays
-        let allScreens = NSScreen.screens
-        let currentScreen = allScreens.first { screen in
+        // Find screen containing cursor
+        let currentScreen = NSScreen.screens.first { screen in
             let frame = screen.frame
             return currentPos.x >= frame.minX && currentPos.x <= frame.maxX &&
                    currentPos.y >= frame.minY && currentPos.y <= frame.maxY
         } ?? NSScreen.main
         
         guard let screen = currentScreen else {
-            print("[SERVER] WARNING: Could not find screen for cursor at \(currentPos)")
             return
         }
         
@@ -707,63 +667,33 @@ class ServerConnection {
         let rightEdgeThreshold = screenFrame.maxX - EdgeDetectionConfig.edgeInset
         let isAtRightEdge = currentPos.x >= rightEdgeThreshold
         
-        // Log when near right edge (within 50 points)
-        if currentPos.x >= screenFrame.maxX - 50 {
-            print("[SERVER] NEAR RIGHT EDGE: x=\(String(format: "%.1f", currentPos.x)), threshold=\(String(format: "%.1f", rightEdgeThreshold)), atEdge=\(isAtRightEdge), cooldown=\(cooldownPassed) (\(String(format: "%.2f", timeSinceLastRelease))s)")
+        // Log when near right edge (within 30 points)
+        if currentPos.x >= screenFrame.maxX - 30 {
+            print("[EDGE-SERVER] Near right: x=\(String(format: "%.1f", currentPos.x)) threshold=\(rightEdgeThreshold) cooldown=\(cooldownPassed)")
             fflush(stdout)
         }
         
-        // Check if cursor hit right edge with cooldown
         if isAtRightEdge && cooldownPassed {
             lastEdgeReleaseTime = now
-            print("")
-            print("[SERVER] ========== RIGHT EDGE HIT - RELEASING CONTROL ==========")
-            print("[SERVER]   cursor position: (\(String(format: "%.1f", currentPos.x)), \(String(format: "%.1f", currentPos.y)))")
-            print("[SERVER]   screen frame: \(screenFrame)")
-            print("[SERVER]   right edge threshold: \(rightEdgeThreshold)")
-            print("[SERVER]   deltaX: \(deltaX)")
-            print("[SERVER]   edge inset config: \(EdgeDetectionConfig.edgeInset)")
-            print("[SERVER] ============================================================")
-            print("")
+            print("[EDGE-SERVER] ===== RIGHT EDGE HIT =====")
+            print("[EDGE-SERVER] cursor: \(currentPos), screen: \(screenFrame)")
             fflush(stdout)
             sendControlRelease()
         } else {
-            // Periodic logging for debugging (avoid spam)
             edgeMissLogCounter += 1
-            if edgeMissLogCounter % EdgeDetectionConfig.logEveryNthMiss == 0 {
-                print("[SERVER] edge check #\(edgeMissLogCounter): loc=(\(String(format: "%.1f", currentPos.x)), \(String(format: "%.1f", currentPos.y))), screen=\(screenFrame.minX)...\(screenFrame.maxX), cooldown=\(cooldownPassed)")
-                fflush(stdout)
-            }
-            
-            // Log why not triggering when near edge
-            if currentPos.x >= screenFrame.maxX - 20 {
-                var reasons: [String] = []
-                if !isAtRightEdge { reasons.append("not at edge (x=\(currentPos.x) < threshold=\(rightEdgeThreshold))") }
-                if !cooldownPassed { reasons.append("cooldown active (\(String(format: "%.2f", timeSinceLastRelease))s < \(EdgeDetectionConfig.cooldownSeconds)s)") }
-                if !reasons.isEmpty {
-                    print("[SERVER] NOT TRIGGERING: \(reasons.joined(separator: ", "))")
-                    fflush(stdout)
-                }
-            }
         }
     }
     
     /// Get screen size for the display containing the cursor, or main display as fallback
     private func getActiveScreenSize() -> CGSize {
         guard let currentPos = CGEvent(source: nil)?.location else {
-            print("[SERVER] getActiveScreenSize: No cursor position, using main screen")
             return getMainScreenSize()
         }
         
-        // Find screen containing cursor
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(currentPos) }) {
             return screen.frame.size
         }
         
-        // Cursor not in any screen frame - might be at edge, log this
-        if mouseEventCounter % 60 == 1 {
-            print("[SERVER] getActiveScreenSize: Cursor at \(currentPos) not in any screen frame, using main screen")
-        }
         return getMainScreenSize()
     }
     
