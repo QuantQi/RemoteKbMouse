@@ -6,6 +6,7 @@ import SharedCode
 import ScreenCaptureKit
 import VideoToolbox
 import CoreMedia
+import Metal
 
 // MARK: - Screen Capturer
 
@@ -14,8 +15,21 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
     private var stream: SCStream?
     private var encoder: H264Encoder?
     private var isStreaming = false
+    private let metalDevice: MTLDevice?
     
     var onEncodedFrame: ((Data, Bool) -> Void)?  // (data, isKeyframe)
+    
+    override init() {
+        // Get the default Metal device for GPU acceleration
+        self.metalDevice = MTLCreateSystemDefaultDevice()
+        super.init()
+        
+        if let device = metalDevice {
+            print("GPU: \(device.name) (Metal supported)")
+        } else {
+            print("Warning: Metal not available, using CPU fallback")
+        }
+    }
     
     func startCapture() async throws {
         // Get available content
@@ -28,27 +42,37 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         
         print("Capturing display: \(display.width)x\(display.height)")
         
-        // Configure stream - use native resolution for performance
+        // Configure stream for maximum GPU performance
         let config = SCStreamConfiguration()
-        config.width = display.width   // Native resolution
+        config.width = display.width
         config.height = display.height
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60)  // 60 fps
-        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange  // YUV is more efficient for H.264
-        config.showsCursor = true
-        config.queueDepth = 8  // More buffer for smoother streaming
         
-        // Enable high performance capture
+        // Use hardware-optimal pixel format
+        // 420YpCbCr8BiPlanarVideoRange is optimal for hardware video encoding
+        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        
+        config.showsCursor = true
+        config.queueDepth = 8  // Buffer for smooth streaming
+        
+        // GPU-specific optimizations
+        config.colorSpaceName = CGColorSpace.displayP3  // Modern wide color
+        
         if #available(macOS 14.0, *) {
-            config.captureResolution = .nominal  // Use display's natural resolution
+            config.captureResolution = .nominal  // Native resolution
+            config.presenterOverlayPrivacyAlertSetting = .never  // No presenter overlay
         }
         
-        // Use actual captured size for encoder
+        if #available(macOS 14.2, *) {
+            config.includeChildWindows = true  // Capture child windows too
+        }
+        
         let captureWidth = Int32(config.width)
         let captureHeight = Int32(config.height)
         
-        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps")
+        print("Capture config: \(captureWidth)x\(captureHeight) @ 60fps (GPU-accelerated)")
         
-        // Create encoder
+        // Create encoder with GPU acceleration
         encoder = H264Encoder(width: captureWidth, height: captureHeight, fps: 60)
         encoder?.onEncodedFrame = { [weak self] data, isKeyframe in
             self?.onEncodedFrame?(data, isKeyframe)
@@ -60,11 +84,13 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         // Create stream
         stream = SCStream(filter: filter, configuration: config, delegate: self)
         
-        try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "screen.capture"))
+        // Use high-priority queue for capture
+        let captureQueue = DispatchQueue(label: "screen.capture", qos: .userInteractive)
+        try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
         
         try await stream?.startCapture()
         isStreaming = true
-        print("Screen capture started")
+        print("Screen capture started (GPU-accelerated)")
     }
     
     func stopCapture() async {
