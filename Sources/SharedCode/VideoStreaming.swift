@@ -231,23 +231,31 @@ public class H264Decoder {
         guard let sps = spsData, let pps = ppsData else { return }
         guard decompressionSession == nil else { return }
         
-        let parameterSets: [UnsafePointer<UInt8>] = [
-            sps.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt8.self) },
-            pps.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt8.self) }
-        ]
-        let sizes = [sps.count, pps.count]
+        // Convert Data to [UInt8] arrays to get stable pointers
+        let spsBytes = [UInt8](sps)
+        let ppsBytes = [UInt8](pps)
         
         var formatDesc: CMVideoFormatDescription?
-        let status = parameterSets.withUnsafeBufferPointer { paramPointer in
-            sizes.withUnsafeBufferPointer { sizesPointer in
-                CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                    allocator: kCFAllocatorDefault,
-                    parameterSetCount: 2,
-                    parameterSetPointers: paramPointer.baseAddress!,
-                    parameterSetSizes: sizesPointer.baseAddress!,
-                    nalUnitHeaderLength: 4,
-                    formatDescriptionOut: &formatDesc
-                )
+        let status = spsBytes.withUnsafeBufferPointer { spsPointer in
+            ppsBytes.withUnsafeBufferPointer { ppsPointer in
+                let parameterSetPointers: [UnsafePointer<UInt8>] = [
+                    spsPointer.baseAddress!,
+                    ppsPointer.baseAddress!
+                ]
+                let parameterSetSizes: [Int] = [spsBytes.count, ppsBytes.count]
+                
+                return parameterSetPointers.withUnsafeBufferPointer { pointersBuffer in
+                    parameterSetSizes.withUnsafeBufferPointer { sizesBuffer in
+                        CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                            allocator: kCFAllocatorDefault,
+                            parameterSetCount: 2,
+                            parameterSetPointers: pointersBuffer.baseAddress!,
+                            parameterSetSizes: sizesBuffer.baseAddress!,
+                            nalUnitHeaderLength: 4,
+                            formatDescriptionOut: &formatDesc
+                        )
+                    }
+                }
             }
         }
         
