@@ -413,7 +413,7 @@ class ServerConnection {
     private var edgeMissLogCounter: Int = 0
     private var mouseEventCounter: Int = 0
     private var isReceivingRemoteInput: Bool = false
-    private var skipNextEdgeCheck: Bool = false  // Skip edge check right after warp
+    private var warpCursorTime: TimeInterval = 0  // Time of last warp, skip edge checks briefly after
 
     init(nwConnection: NWConnection) {
         self.nwConnection = nwConnection
@@ -626,8 +626,8 @@ class ServerConnection {
                 print("[EDGE-SERVER] Before: \(beforePos) -> After: \(afterPos)")
                 print("[EDGE-SERVER] Screen size: \(getMainScreenSize())")
                 fflush(stdout)
-                // Skip the next few edge checks to let the cursor settle
-                skipNextEdgeCheck = true
+                // Skip edge checks for 500ms after warp to let mouse events settle
+                warpCursorTime = CACurrentMediaTime()
                 
             case .startVideoStream:
                 startVideoStream()
@@ -647,11 +647,16 @@ class ServerConnection {
     }
     
     private func checkRightEdge(screenSize: CGSize, deltaX: Double = 0) {
-        // Skip edge check right after warp to prevent immediate trigger
-        if skipNextEdgeCheck {
-            skipNextEdgeCheck = false
-            print("[EDGE-SERVER] Skipping edge check (post-warp)")
-            fflush(stdout)
+        // Skip edge checks for 500ms after warp to let mouse events settle
+        let now = CACurrentMediaTime()
+        let timeSinceWarp = now - warpCursorTime
+        if timeSinceWarp < 0.5 {
+            // Only log occasionally to avoid spam
+            if edgeMissLogCounter % 30 == 0 {
+                print("[EDGE-SERVER] Skipping edge check (\(String(format: "%.0f", timeSinceWarp * 1000))ms since warp)")
+                fflush(stdout)
+            }
+            edgeMissLogCounter += 1
             return
         }
         
@@ -659,7 +664,6 @@ class ServerConnection {
             return
         }
         
-        let now = CACurrentMediaTime()
         let timeSinceLastRelease = now - lastEdgeReleaseTime
         let cooldownPassed = timeSinceLastRelease >= EdgeDetectionConfig.cooldownSeconds
         
