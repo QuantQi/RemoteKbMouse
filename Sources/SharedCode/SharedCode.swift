@@ -28,6 +28,59 @@ public enum ControlState: String, Codable {
     case pendingRelease  // Server signaled release, waiting for client to acknowledge
 }
 
+// MARK: - Display Mode & Capability
+
+/// Represents the desired display mode from client
+public struct DesiredDisplayMode: Codable {
+    public let width: Int
+    public let height: Int
+    public let scale: Double
+    public let refreshRate: Int?  // Optional refresh rate in Hz
+    
+    public init(width: Int, height: Int, scale: Double = 2.0, refreshRate: Int? = 60) {
+        self.width = width
+        self.height = height
+        self.scale = scale
+        self.refreshRate = refreshRate
+    }
+}
+
+/// Server response confirming virtual display setup
+public struct VirtualDisplayReady: Codable {
+    public let width: Int
+    public let height: Int
+    public let scale: Double
+    public let displayID: UInt32
+    public let isVirtual: Bool  // true if virtual display, false if fallback to mirror
+    
+    public init(width: Int, height: Int, scale: Double, displayID: UInt32, isVirtual: Bool) {
+        self.width = width
+        self.height = height
+        self.scale = scale
+        self.displayID = displayID
+        self.isVirtual = isVirtual
+    }
+}
+
+/// Server capability flags
+public struct ServerCapabilities: Codable {
+    public let supportsVirtualDisplay: Bool
+    public let macOSVersion: String
+    
+    public init(supportsVirtualDisplay: Bool, macOSVersion: String) {
+        self.supportsVirtualDisplay = supportsVirtualDisplay
+        self.macOSVersion = macOSVersion
+    }
+    
+    /// Check if current system supports virtual displays (macOS 14+)
+    public static func current() -> ServerCapabilities {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let versionString = "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+        let supportsVirtual = version.majorVersion >= 14
+        return ServerCapabilities(supportsVirtualDisplay: supportsVirtual, macOSVersion: versionString)
+    }
+}
+
 // MARK: - Remote Input Event (unified keyboard + mouse)
 
 public enum RemoteInputEvent: Codable {
@@ -39,6 +92,9 @@ public enum RemoteInputEvent: Codable {
     case startVideoStream                  // Client requests video stream
     case stopVideoStream                   // Client stops video stream
     case clipboard(ClipboardPayload)       // Clipboard sync
+    case clientDesiredDisplayMode(DesiredDisplayMode)  // Client sends desired display mode
+    case virtualDisplayReady(VirtualDisplayReady)      // Server confirms virtual display ready
+    case serverCapabilities(ServerCapabilities)        // Server sends capabilities on connect
 }
 
 // MARK: - Video Frame Header (binary protocol, not JSON)
