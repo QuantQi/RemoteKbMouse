@@ -236,22 +236,36 @@ class KVMController: ObservableObject {
     
     private func startGestureMonitors() {
         guard swipeMonitor == nil else { return }
+        print("[GESTURE] Starting gesture monitors")
+        fflush(stdout)
         
-        swipeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .swipe) { [weak self] event in
+        // Use local monitors since the app is in foreground with cursor locked
+        // Local monitors capture events directed at this application
+        swipeMonitor = NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
+            print("[GESTURE] Local swipe event: deltaX=\(event.deltaX) deltaY=\(event.deltaY)")
+            fflush(stdout)
             self?.handleSwipe(event)
+            return nil  // Consume the event
         }
         
-        smartZoomMonitor = NSEvent.addGlobalMonitorForEvents(matching: .smartMagnify) { [weak self] event in
+        smartZoomMonitor = NSEvent.addLocalMonitorForEvents(matching: .smartMagnify) { [weak self] event in
+            print("[GESTURE] Local smartMagnify event")
+            fflush(stdout)
             self?.handleSmartZoom(event)
+            return nil  // Consume the event
         }
         
-        // Catch two-finger double-tap if smartMagnify doesn't fire
-        gestureMonitor = NSEvent.addGlobalMonitorForEvents(matching: .gesture) { [weak self] event in
-            self?.handleGesture(event)
+        // Also add global monitors as fallback for when events go to other apps
+        gestureMonitor = NSEvent.addGlobalMonitorForEvents(matching: .smartMagnify) { [weak self] event in
+            print("[GESTURE] Global smartMagnify event")
+            fflush(stdout)
+            self?.handleSmartZoom(event)
         }
     }
     
     private func stopGestureMonitors() {
+        print("[GESTURE] Stopping gesture monitors")
+        fflush(stdout)
         if let token = swipeMonitor { NSEvent.removeMonitor(token) }
         if let token = smartZoomMonitor { NSEvent.removeMonitor(token) }
         if let token = gestureMonitor { NSEvent.removeMonitor(token) }
@@ -280,6 +294,8 @@ class KVMController: ObservableObject {
     }
     
     private func handleSwipe(_ event: NSEvent) {
+        print("[GESTURE] handleSwipe called: isControllingRemote=\(isControllingRemote), connectionReady=\(connection?.state == .ready)")
+        fflush(stdout)
         guard isControllingRemote, connection?.state == .ready else { return }
         
         let dx = event.deltaX
@@ -305,10 +321,14 @@ class KVMController: ObservableObject {
             tapCount: Int(event.clickCount),
             timestamp: event.timestamp
         )
+        print("[GESTURE] Sending swipe gesture: direction=\(dir), deltaX=\(dx), deltaY=\(dy)")
+        fflush(stdout)
         send(event: .gesture(gesture))
     }
     
     private func handleSmartZoom(_ event: NSEvent) {
+        print("[GESTURE] handleSmartZoom called: isControllingRemote=\(isControllingRemote), connectionReady=\(connection?.state == .ready)")
+        fflush(stdout)
         guard isControllingRemote, connection?.state == .ready else { return }
         
         let gesture = RemoteGestureEvent(

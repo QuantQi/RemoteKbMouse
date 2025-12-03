@@ -226,6 +226,10 @@ public struct RemoteMouseEvent: Codable {
     public let buttonNumber: Int32 // 0 = left, 1 = right, 2 = middle/other
     public let clickState: Int64   // For double/triple click detection
     
+    // Scroll phase fields for Magic Mouse gesture support
+    public let scrollPhase: Int64       // NSEvent.Phase raw value for gesture phase
+    public let momentumPhase: Int64     // NSEvent.Phase raw value for momentum phase
+    
     public enum MouseEventType: String, Codable {
         case moved
         case leftDown
@@ -250,6 +254,10 @@ public struct RemoteMouseEvent: Codable {
         self.scrollDeltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
         self.buttonNumber = Int32(event.getIntegerValueField(.mouseEventButtonNumber))
         self.clickState = event.getIntegerValueField(.mouseEventClickState)
+        
+        // Capture scroll phases for gesture support (Magic Mouse swipes)
+        self.scrollPhase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
+        self.momentumPhase = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
         
         switch event.type {
         case .mouseMoved:
@@ -338,6 +346,15 @@ public struct RemoteMouseEvent: Codable {
             guard let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(scrollDeltaY * 10), wheel2: Int32(scrollDeltaX * 10), wheel3: 0) else {
                 return nil
             }
+            
+            // Set scroll phases for gesture support (Magic Mouse swipes)
+            if scrollPhase != 0 {
+                scrollEvent.setIntegerValueField(.scrollWheelEventScrollPhase, value: scrollPhase)
+            }
+            if momentumPhase != 0 {
+                scrollEvent.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentumPhase)
+            }
+            
             return scrollEvent
         }
         
