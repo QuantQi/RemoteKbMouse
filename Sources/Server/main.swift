@@ -632,14 +632,31 @@ class ServerConnection {
                 mouseEventCounter += 1
                 isReceivingRemoteInput = true
                 
+                // Log scroll wheel events
+                if mouseEvent.eventType == .scrollWheel {
+                    print("[SERVER-RECV] ScrollWheel: dX=\(String(format: "%.2f", mouseEvent.scrollDeltaX)) dY=\(String(format: "%.2f", mouseEvent.scrollDeltaY)) phase=\(mouseEvent.scrollPhase) momentum=\(mouseEvent.momentumPhase)")
+                    fflush(stdout)
+                }
+                
                 let screenSize = getActiveScreenSize()
                 
                 if let cgEvent = mouseEvent.toCGEvent(screenSize: screenSize) {
                     cgEvent.post(tap: .cgSessionEventTap)
+                    
+                    // Log that we posted the event
+                    if mouseEvent.eventType == .scrollWheel {
+                        let postedPhase = cgEvent.getIntegerValueField(.scrollWheelEventScrollPhase)
+                        let postedMomentum = cgEvent.getIntegerValueField(.scrollWheelEventMomentumPhase)
+                        print("[SERVER-POST] ScrollWheel posted: phase=\(postedPhase) momentum=\(postedMomentum)")
+                        fflush(stdout)
+                    }
+                    
                     checkRightEdge(screenSize: screenSize, deltaX: mouseEvent.deltaX)
                 }
                 
             case .gesture(let gestureEvent):
+                print("[SERVER-RECV] Gesture: kind=\(gestureEvent.kind) dir=\(gestureEvent.direction) phase=\(gestureEvent.phase)")
+                fflush(stdout)
                 handleGesture(gestureEvent)
                 
             case .warpCursor(let warpEvent):
@@ -677,6 +694,9 @@ class ServerConnection {
     // MARK: - Gesture Handling (Magic Mouse)
     
     private func handleGesture(_ g: RemoteGestureEvent) {
+        print("[SERVER-GESTURE] Handling: kind=\(g.kind) dir=\(g.direction) dX=\(g.deltaX) dY=\(g.deltaY) phase=\(g.phase)")
+        fflush(stdout)
+        
         switch g.kind {
         case .swipe:
             // Create a scroll wheel event to simulate swipe gesture
@@ -689,7 +709,11 @@ class ServerConnection {
                 wheel1: Int32(g.deltaY * scaleFactor),
                 wheel2: Int32(g.deltaX * scaleFactor),
                 wheel3: 0
-            ) else { return }
+            ) else { 
+                print("[SERVER-GESTURE] Failed to create scroll event")
+                fflush(stdout)
+                return 
+            }
             
             // Set phase based on gesture phase
             let phaseField: CGEventField = .scrollWheelEventScrollPhase
@@ -719,10 +743,18 @@ class ServerConnection {
             }
             
             event.post(tap: .cgSessionEventTap)
+            print("[SERVER-GESTURE] Posted swipe scroll event")
+            fflush(stdout)
             
         case .smartZoom:
+            print("[SERVER-GESTURE] Handling smartZoom - posting double-click")
+            fflush(stdout)
             // Simulate double-click at current cursor position for smart zoom
-            guard let pos = CGEvent(source: nil)?.location else { return }
+            guard let pos = CGEvent(source: nil)?.location else { 
+                print("[SERVER-GESTURE] Failed to get cursor position")
+                fflush(stdout)
+                return 
+            }
             
             func postClick(_ type: CGEventType, clickState: Int64) {
                 if let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: pos, mouseButton: .left) {

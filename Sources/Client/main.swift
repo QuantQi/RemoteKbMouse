@@ -769,6 +769,18 @@ class KVMController: ObservableObject {
     func send(event: RemoteInputEvent) {
         guard connection?.state == .ready else { return }
         
+        // Log what we're sending
+        switch event {
+        case .mouse(let m) where m.eventType == .scrollWheel:
+            print("[CLIENT-SEND] ScrollWheel: dX=\(String(format: "%.2f", m.scrollDeltaX)) dY=\(String(format: "%.2f", m.scrollDeltaY)) phase=\(m.scrollPhase) momentum=\(m.momentumPhase)")
+            fflush(stdout)
+        case .gesture(let g):
+            print("[CLIENT-SEND] Gesture: kind=\(g.kind) dir=\(g.direction) phase=\(g.phase)")
+            fflush(stdout)
+        default:
+            break
+        }
+        
         let encoder = JSONEncoder()
         do {
             let data = try encoder.encode(event)
@@ -1048,6 +1060,16 @@ class KVMController: ObservableObject {
         if isMouseEvent {
             mouseEventCounter += 1
             let screenSize = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+            
+            // Log scroll wheel events with phase info
+            if type == .scrollWheel {
+                let scrollPhase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
+                let momentumPhase = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
+                let deltaX = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+                let deltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
+                print("[CLIENT-TAP] ScrollWheel captured: dX=\(String(format: "%.2f", deltaX)) dY=\(String(format: "%.2f", deltaY)) phase=\(scrollPhase) momentum=\(momentumPhase)")
+                fflush(stdout)
+            }
             
             if let remoteEvent = RemoteMouseEvent(event: event, screenSize: screenSize) {
                 send(event: .mouse(remoteEvent))
