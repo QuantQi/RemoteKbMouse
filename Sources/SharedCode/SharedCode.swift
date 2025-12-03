@@ -33,12 +33,65 @@ public enum ControlState: String, Codable {
 public enum RemoteInputEvent: Codable {
     case keyboard(RemoteKeyboardEvent)
     case mouse(RemoteMouseEvent)
+    case gesture(RemoteGestureEvent)       // Magic Mouse gestures
     case screenInfo(ScreenInfoEvent)      // Server tells client its screen size
     case controlRelease                    // Server tells client to release control (edge hit)
     case warpCursor(WarpCursorEvent)       // Client tells server to warp cursor
     case startVideoStream                  // Client requests video stream
     case stopVideoStream                   // Client stops video stream
     case clipboard(ClipboardPayload)       // Clipboard sync
+}
+
+// MARK: - Gesture Event (Magic Mouse gestures)
+
+public struct RemoteGestureEvent: Codable {
+    public enum Kind: String, Codable {
+        case swipe
+        case smartZoom
+        case missionControlTap
+    }
+    
+    public enum Direction: String, Codable {
+        case left
+        case right
+        case up
+        case down
+        case none
+    }
+    
+    public enum Phase: String, Codable {
+        case began
+        case changed
+        case ended
+        case momentumBegan
+        case momentum
+        case momentumEnded
+        case mayBegin
+    }
+    
+    public let kind: Kind
+    public let direction: Direction
+    public let deltaX: Double
+    public let deltaY: Double
+    public let phase: Phase
+    public let tapCount: Int
+    public let timestamp: Double
+    
+    public init(kind: Kind,
+                direction: Direction = .none,
+                deltaX: Double = 0,
+                deltaY: Double = 0,
+                phase: Phase = .ended,
+                tapCount: Int = 0,
+                timestamp: Double) {
+        self.kind = kind
+        self.direction = direction
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.phase = phase
+        self.tapCount = tapCount
+        self.timestamp = timestamp
+    }
 }
 
 // MARK: - Video Frame Header (binary protocol, not JSON)

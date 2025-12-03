@@ -176,6 +176,11 @@ class KVMController: ObservableObject {
     private var mouseEventCounter: Int = 0
     private var lastLoggedState: Bool? = nil
     
+    // Gesture monitors (Magic Mouse gestures)
+    private var swipeMonitor: Any?
+    private var smartZoomMonitor: Any?
+    private var gestureMonitor: Any?
+    
     init() {
         // Initialize GPU resources
         metalDevice = MTLCreateSystemDefaultDevice()
@@ -225,6 +230,115 @@ class KVMController: ObservableObject {
             }
         }
         // print("Video decoder initialized")
+    }
+    
+    // MARK: - Gesture Monitors (Magic Mouse)
+    
+    private func startGestureMonitors() {
+        guard swipeMonitor == nil else { return }
+        
+        swipeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .swipe) { [weak self] event in
+            self?.handleSwipe(event)
+        }
+        
+        smartZoomMonitor = NSEvent.addGlobalMonitorForEvents(matching: .smartMagnify) { [weak self] event in
+            self?.handleSmartZoom(event)
+        }
+        
+        // Catch two-finger double-tap if smartMagnify doesn't fire
+        gestureMonitor = NSEvent.addGlobalMonitorForEvents(matching: .gesture) { [weak self] event in
+            self?.handleGesture(event)
+        }
+    }
+    
+    private func stopGestureMonitors() {
+        if let token = swipeMonitor { NSEvent.removeMonitor(token) }
+        if let token = smartZoomMonitor { NSEvent.removeMonitor(token) }
+        if let token = gestureMonitor { NSEvent.removeMonitor(token) }
+        swipeMonitor = nil
+        smartZoomMonitor = nil
+        gestureMonitor = nil
+    }
+    
+    private func mapPhase(_ phase: NSEvent.Phase) -> RemoteGestureEvent.Phase {
+        switch phase {
+        case .began: return .began
+        case .changed: return .changed
+        case .ended: return .ended
+        case .mayBegin: return .mayBegin
+        default: return .ended
+        }
+    }
+    
+    private func mapMomentumPhase(_ phase: NSEvent.Phase) -> RemoteGestureEvent.Phase {
+        switch phase {
+        case .began: return .momentumBegan
+        case .changed: return .momentum
+        case .ended: return .momentumEnded
+        default: return .ended
+        }
+    }
+    
+    private func handleSwipe(_ event: NSEvent) {
+        guard isControllingRemote, connection?.state == .ready else { return }
+        
+        let dx = event.deltaX
+        let dy = event.deltaY
+        
+        let dir: RemoteGestureEvent.Direction
+        if abs(dx) >= abs(dy) {
+            dir = dx > 0 ? .left : .right
+        } else {
+            dir = dy > 0 ? .up : .down
+        }
+        
+        let phase = mapPhase(event.phase)
+        let momentumPhase = mapMomentumPhase(event.momentumPhase)
+        let finalPhase = event.momentumPhase != [] ? momentumPhase : phase
+        
+        let gesture = RemoteGestureEvent(
+            kind: .swipe,
+            direction: dir,
+            deltaX: dx,
+            deltaY: dy,
+            phase: finalPhase,
+            tapCount: Int(event.clickCount),
+            timestamp: event.timestamp
+        )
+        send(event: .gesture(gesture))
+    }
+    
+    private func handleSmartZoom(_ event: NSEvent) {
+        guard isControllingRemote, connection?.state == .ready else { return }
+        
+        let gesture = RemoteGestureEvent(
+            kind: .smartZoom,
+            direction: .none,
+            deltaX: 0,
+            deltaY: 0,
+            phase: .ended,
+            tapCount: Int(event.clickCount),
+            timestamp: event.timestamp
+        )
+        send(event: .gesture(gesture))
+    }
+    
+    private func handleGesture(_ event: NSEvent) {
+        guard isControllingRemote, connection?.state == .ready else { return }
+        
+        // Heuristic: two-finger double-tap for Mission Control
+        if event.type == .gesture, event.clickCount >= 2 {
+            let gesture = RemoteGestureEvent(
+                kind: .missionControlTap,
+                direction: .none,
+                deltaX: 0,
+                deltaY: 0,
+                phase: .ended,
+                tapCount: Int(event.clickCount),
+                timestamp: event.timestamp
+            )
+            send(event: .gesture(gesture))
+        }
     }
     
     private var displayedFrameCount: UInt64 = 0
@@ -280,6 +394,9 @@ class KVMController: ObservableObject {
     /// Clean up all resources
     func stop() {
         stopEventTap()
+        
+        // Stop gesture monitors
+        stopGestureMonitors()
         
         // Stop cursor lock timer
         cursorLockTimer?.invalidate()
@@ -623,7 +740,7 @@ class KVMController: ObservableObject {
         case .clipboard(let payload):
             clipboardSync.apply(payload: payload)
             
-        case .keyboard, .mouse, .warpCursor, .startVideoStream, .stopVideoStream:
+        case .keyboard, .mouse, .gesture, .warpCursor, .startVideoStream, .stopVideoStream:
             // These are client-to-server events, ignore
             break
         }
@@ -771,11 +888,17 @@ class KVMController: ObservableObject {
             CGWarpMouseCursorPosition(self.cursorLockPosition)
         }
         
+        // Start gesture monitors for Magic Mouse gestures
+        startGestureMonitors()
+        
         // print("Cursor hidden and locked at \(cursorLockPosition)")
         // fflush(stdout)
     }
     
     private func showCursorAndUnlock() {
+        // Stop gesture monitors
+        stopGestureMonitors()
+        
         // Stop the cursor lock timer
         cursorLockTimer?.invalidate()
         cursorLockTimer = nil

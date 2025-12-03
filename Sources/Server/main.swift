@@ -639,6 +639,9 @@ class ServerConnection {
                     checkRightEdge(screenSize: screenSize, deltaX: mouseEvent.deltaX)
                 }
                 
+            case .gesture(let gestureEvent):
+                handleGesture(gestureEvent)
+                
             case .warpCursor(let warpEvent):
                 let point = CGPoint(x: warpEvent.x, y: warpEvent.y)
                 // let beforePos = CGEvent(source: nil)?.location ?? .zero
@@ -668,6 +671,77 @@ class ServerConnection {
             }
         } catch {
             // print("[SERVER] ERROR: Failed to decode: \(error)")
+        }
+    }
+    
+    // MARK: - Gesture Handling (Magic Mouse)
+    
+    private func handleGesture(_ g: RemoteGestureEvent) {
+        switch g.kind {
+        case .swipe:
+            // Create a scroll wheel event to simulate swipe gesture
+            // Scale deltas to make swipe feel natural
+            let scaleFactor: Double = 8.0
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: Int32(g.deltaY * scaleFactor),
+                wheel2: Int32(g.deltaX * scaleFactor),
+                wheel3: 0
+            ) else { return }
+            
+            // Set phase based on gesture phase
+            let phaseField: CGEventField = .scrollWheelEventScrollPhase
+            let momentumField: CGEventField = .scrollWheelEventMomentumPhase
+            
+            let isMomentum = [.momentumBegan, .momentum, .momentumEnded].contains(g.phase)
+            
+            if isMomentum {
+                let value: Int64
+                switch g.phase {
+                case .momentumBegan: value = Int64(NSEvent.Phase.began.rawValue)
+                case .momentum: value = Int64(NSEvent.Phase.changed.rawValue)
+                case .momentumEnded: value = Int64(NSEvent.Phase.ended.rawValue)
+                default: value = Int64(NSEvent.Phase.changed.rawValue)
+                }
+                event.setIntegerValueField(momentumField, value: value)
+            } else {
+                let value: Int64
+                switch g.phase {
+                case .began: value = Int64(NSEvent.Phase.began.rawValue)
+                case .changed: value = Int64(NSEvent.Phase.changed.rawValue)
+                case .ended: value = Int64(NSEvent.Phase.ended.rawValue)
+                case .mayBegin: value = Int64(NSEvent.Phase.mayBegin.rawValue)
+                default: value = Int64(NSEvent.Phase.ended.rawValue)
+                }
+                event.setIntegerValueField(phaseField, value: value)
+            }
+            
+            event.post(tap: .cgSessionEventTap)
+            
+        case .smartZoom:
+            // Simulate double-click at current cursor position for smart zoom
+            guard let pos = CGEvent(source: nil)?.location else { return }
+            
+            func postClick(_ type: CGEventType, clickState: Int64) {
+                if let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: pos, mouseButton: .left) {
+                    e.setIntegerValueField(.mouseEventClickState, value: clickState)
+                    e.post(tap: .cgSessionEventTap)
+                }
+            }
+            
+            postClick(.leftMouseDown, clickState: 2)
+            postClick(.leftMouseUp, clickState: 2)
+            
+        case .missionControlTap:
+            // Map to Mission Control key (kVK_MissionControl = 0xA0)
+            let missionControlKeyCode: CGKeyCode = 0xA0
+            if let down = CGEvent(keyboardEventSource: nil, virtualKey: missionControlKeyCode, keyDown: true),
+               let up = CGEvent(keyboardEventSource: nil, virtualKey: missionControlKeyCode, keyDown: false) {
+                down.post(tap: .cgSessionEventTap)
+                up.post(tap: .cgSessionEventTap)
+            }
         }
     }
     
