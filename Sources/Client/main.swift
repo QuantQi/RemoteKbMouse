@@ -176,10 +176,9 @@ class KVMController: ObservableObject {
     private var mouseEventCounter: Int = 0
     private var lastLoggedState: Bool? = nil
     
-    // Gesture monitors (Magic Mouse gestures)
-    private var swipeMonitor: Any?
-    private var smartZoomMonitor: Any?
-    private var gestureMonitor: Any?
+    // Note: Magic Mouse swipes are scroll wheel events with phases, not .swipe events.
+    // They are captured by the CGEvent tap and forwarded as RemoteMouseEvent with scrollPhase.
+    // NSEvent gesture monitors (.swipe) only work for trackpad, not Magic Mouse.
     
     init() {
         // Initialize GPU resources
@@ -232,134 +231,10 @@ class KVMController: ObservableObject {
         // print("Video decoder initialized")
     }
     
-    // MARK: - Gesture Monitors (Magic Mouse)
-    
-    private func startGestureMonitors() {
-        guard swipeMonitor == nil else { return }
-        print("[GESTURE] Starting gesture monitors")
-        fflush(stdout)
-        
-        // Use local monitors since the app is in foreground with cursor locked
-        // Local monitors capture events directed at this application
-        swipeMonitor = NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
-            print("[GESTURE] Local swipe event: deltaX=\(event.deltaX) deltaY=\(event.deltaY)")
-            fflush(stdout)
-            self?.handleSwipe(event)
-            return nil  // Consume the event
-        }
-        
-        smartZoomMonitor = NSEvent.addLocalMonitorForEvents(matching: .smartMagnify) { [weak self] event in
-            print("[GESTURE] Local smartMagnify event")
-            fflush(stdout)
-            self?.handleSmartZoom(event)
-            return nil  // Consume the event
-        }
-        
-        // Also add global monitors as fallback for when events go to other apps
-        gestureMonitor = NSEvent.addGlobalMonitorForEvents(matching: .smartMagnify) { [weak self] event in
-            print("[GESTURE] Global smartMagnify event")
-            fflush(stdout)
-            self?.handleSmartZoom(event)
-        }
-    }
-    
-    private func stopGestureMonitors() {
-        print("[GESTURE] Stopping gesture monitors")
-        fflush(stdout)
-        if let token = swipeMonitor { NSEvent.removeMonitor(token) }
-        if let token = smartZoomMonitor { NSEvent.removeMonitor(token) }
-        if let token = gestureMonitor { NSEvent.removeMonitor(token) }
-        swipeMonitor = nil
-        smartZoomMonitor = nil
-        gestureMonitor = nil
-    }
-    
-    private func mapPhase(_ phase: NSEvent.Phase) -> RemoteGestureEvent.Phase {
-        switch phase {
-        case .began: return .began
-        case .changed: return .changed
-        case .ended: return .ended
-        case .mayBegin: return .mayBegin
-        default: return .ended
-        }
-    }
-    
-    private func mapMomentumPhase(_ phase: NSEvent.Phase) -> RemoteGestureEvent.Phase {
-        switch phase {
-        case .began: return .momentumBegan
-        case .changed: return .momentum
-        case .ended: return .momentumEnded
-        default: return .ended
-        }
-    }
-    
-    private func handleSwipe(_ event: NSEvent) {
-        print("[GESTURE] handleSwipe called: isControllingRemote=\(isControllingRemote), connectionReady=\(connection?.state == .ready)")
-        fflush(stdout)
-        guard isControllingRemote, connection?.state == .ready else { return }
-        
-        let dx = event.deltaX
-        let dy = event.deltaY
-        
-        let dir: RemoteGestureEvent.Direction
-        if abs(dx) >= abs(dy) {
-            dir = dx > 0 ? .left : .right
-        } else {
-            dir = dy > 0 ? .up : .down
-        }
-        
-        let phase = mapPhase(event.phase)
-        let momentumPhase = mapMomentumPhase(event.momentumPhase)
-        let finalPhase = event.momentumPhase != [] ? momentumPhase : phase
-        
-        let gesture = RemoteGestureEvent(
-            kind: .swipe,
-            direction: dir,
-            deltaX: dx,
-            deltaY: dy,
-            phase: finalPhase,
-            tapCount: Int(event.clickCount),
-            timestamp: event.timestamp
-        )
-        print("[GESTURE] Sending swipe gesture: direction=\(dir), deltaX=\(dx), deltaY=\(dy)")
-        fflush(stdout)
-        send(event: .gesture(gesture))
-    }
-    
-    private func handleSmartZoom(_ event: NSEvent) {
-        print("[GESTURE] handleSmartZoom called: isControllingRemote=\(isControllingRemote), connectionReady=\(connection?.state == .ready)")
-        fflush(stdout)
-        guard isControllingRemote, connection?.state == .ready else { return }
-        
-        let gesture = RemoteGestureEvent(
-            kind: .smartZoom,
-            direction: .none,
-            deltaX: 0,
-            deltaY: 0,
-            phase: .ended,
-            tapCount: Int(event.clickCount),
-            timestamp: event.timestamp
-        )
-        send(event: .gesture(gesture))
-    }
-    
-    private func handleGesture(_ event: NSEvent) {
-        guard isControllingRemote, connection?.state == .ready else { return }
-        
-        // Heuristic: two-finger double-tap for Mission Control
-        if event.type == .gesture, event.clickCount >= 2 {
-            let gesture = RemoteGestureEvent(
-                kind: .missionControlTap,
-                direction: .none,
-                deltaX: 0,
-                deltaY: 0,
-                phase: .ended,
-                tapCount: Int(event.clickCount),
-                timestamp: event.timestamp
-            )
-            send(event: .gesture(gesture))
-        }
-    }
+    // NOTE: Magic Mouse swipes are NOT .swipe NSEvent events.
+    // They are scroll wheel events with phase information (began/changed/ended).
+    // The CGEvent tap already captures these and forwards them via RemoteMouseEvent.
+    // NSEvent.addLocalMonitorForEvents(matching: .swipe) only works for trackpad gestures.
     
     private var displayedFrameCount: UInt64 = 0
     
@@ -414,9 +289,6 @@ class KVMController: ObservableObject {
     /// Clean up all resources
     func stop() {
         stopEventTap()
-        
-        // Stop gesture monitors
-        stopGestureMonitors()
         
         // Stop cursor lock timer
         cursorLockTimer?.invalidate()
@@ -920,17 +792,11 @@ class KVMController: ObservableObject {
             CGWarpMouseCursorPosition(self.cursorLockPosition)
         }
         
-        // Start gesture monitors for Magic Mouse gestures
-        startGestureMonitors()
-        
         // print("Cursor hidden and locked at \(cursorLockPosition)")
         // fflush(stdout)
     }
     
     private func showCursorAndUnlock() {
-        // Stop gesture monitors
-        stopGestureMonitors()
-        
         // Stop the cursor lock timer
         cursorLockTimer?.invalidate()
         cursorLockTimer = nil
