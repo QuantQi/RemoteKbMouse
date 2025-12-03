@@ -298,7 +298,8 @@ class Server {
         switch newState {
         case .ready:
             // print("Server ready and advertising on port \(listener.port?.debugDescription ?? "?")")
-        case .failed(let error):
+            break
+        case .failed(_):
             // print("Server failed with error: \(error). Rebuilding listener...")
             listener.cancel()
             // After cancel, listener cannot be reused - must create a new one
