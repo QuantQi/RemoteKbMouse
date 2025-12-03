@@ -65,7 +65,7 @@ public class H264Encoder {
         }
         
         let error = "Failed to create any video encoder"
-        print(error)
+        // print(error)
         onError?(error)
     }
     
@@ -633,14 +633,14 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
         if status != noErr {
             let codecName = (detectedCodec == .hevc) ? "HEVC" : "H.264"
             let error = "Failed to create \(codecName) format description: \(status)"
-            print(error)
+            // print(error)
             onError?(error)
             return
         }
         
         guard let desc = formatDesc else {
             let error = "Format description is nil"
-            print(error)
+            // print(error)
             onError?(error)
             return
         }
@@ -678,7 +678,7 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
         
         guard createStatus == noErr, let session = session else {
             let error = "Failed to create decompression session: \(createStatus)"
-            print(error)
+            // print(error)
             onError?(error)
             return
         }

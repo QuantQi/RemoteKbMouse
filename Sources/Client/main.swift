@@ -186,7 +186,7 @@ class KVMController: ObservableObject {
             textureCache = cache
             // print("GPU: \(device.name) (Metal zero-copy enabled)")
         } else {
-            print("Warning: Metal not available")
+            // print("Warning: Metal not available")
         }
         
         // print("KVMController initialized.")
@@ -270,10 +270,10 @@ class KVMController: ObservableObject {
         hasInputMonitoringPermission = AXIsProcessTrustedWithOptions(options)
         
         if !hasInputMonitoringPermission {
-            print("\n--- PERMISSION REQUIRED ---")
-            print("This application needs Input Monitoring permissions to capture keyboard events.")
-            print("Please go to System Settings > Privacy & Security > Input Monitoring and enable it for 'Client'.")
-            print("---------------------------\n")
+            // print("\n--- PERMISSION REQUIRED ---")
+            // print("This application needs Input Monitoring permissions to capture keyboard events.")
+            // print("Please go to System Settings > Privacy & Security > Input Monitoring and enable it for 'Client'.")
+            // print("---------------------------\n")
         }
     }
     
@@ -307,8 +307,8 @@ class KVMController: ObservableObject {
     func toggleRemoteControl() {
         // Only allow controlling remote if we have a connection
         guard connection?.state == .ready else {
-            print("Cannot control remote: No server connection.")
-            fflush(stdout)
+            // print("Cannot control remote: No server connection.")
+            // fflush(stdout)
             return
         }
         
@@ -376,7 +376,7 @@ class KVMController: ObservableObject {
             // print("Browser state updated: \(newState)")
             switch newState {
             case .failed(let error):
-                print("Browser failed with error: \(error). Restarting...")
+                // print("Browser failed with error: \(error). Restarting...")
                 self?.browser?.cancel()
                 self?.browser = nil
                 // Restart browsing after a short delay
@@ -418,11 +418,11 @@ class KVMController: ObservableObject {
             // print("Connection state updated: \(newState)")
             switch newState {
             case .ready:
-                print("Connected to server.")
+                // print("Connected to server.")
                 self?.startReceiving() // Start receiving messages from server
                 self?.clipboardSync.startPolling()
             case .failed, .cancelled:
-                print("Connection lost.")
+                // print("Connection lost.")
                 self?.connection = nil
                 self?.clipboardSync.stopPolling()
                 DispatchQueue.main.async { self?.isControllingRemote = false }
@@ -461,7 +461,7 @@ class KVMController: ObservableObject {
                 // print("[RECV] Connection complete")
             }
             if let error = error {
-                print("[RECV] Connection error: \(error)")
+                // print("[RECV] Connection error: \(error)")
             }
         }
     }
@@ -712,8 +712,8 @@ class KVMController: ObservableObject {
         )
 
         guard let eventTap = eventTap else {
-            print("Failed to create event tap. Make sure Input Monitoring permission is granted.")
-            fflush(stdout)
+            // print("Failed to create event tap. Make sure Input Monitoring permission is granted.")
+            // fflush(stdout)
             DispatchQueue.main.async { self.isControllingRemote = false }
             return
         }
@@ -941,7 +941,7 @@ class KVMController: ObservableObject {
         }
         
         guard let finalDevice = device else {
-            print("No video capture device found. Please connect a camera or capture card.")
+            // print("No video capture device found. Please connect a camera or capture card.")
             return
         }
         

@@ -28,7 +28,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         if let device = metalDevice {
             // print("GPU: \(device.name) (Metal supported)")
         } else {
-            print("Warning: Metal not available, using CPU fallback")
+            // print("Warning: Metal not available, using CPU fallback")
         }
     }
     
@@ -37,7 +37,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         
         guard let display = content.displays.first else {
-            print("No display found")
+            // print("No display found")
             return
         }
         
@@ -222,41 +222,41 @@ class Server {
     }
 
     func start() {
-        print("Server starting...")
-        print("Process: \(ProcessInfo.processInfo.processName)")
-        print("PID: \(ProcessInfo.processInfo.processIdentifier)")
+        // print("Server starting...")
+        // print("Process: \(ProcessInfo.processInfo.processName)")
+        // print("PID: \(ProcessInfo.processInfo.processIdentifier)")
         
         // Check for screen recording permission (required for ScreenCaptureKit)
         let hasScreenRecording = CGPreflightScreenCaptureAccess()
-        print("\n--- SCREEN RECORDING PERMISSION CHECK ---")
-        print("CGPreflightScreenCaptureAccess() = \(hasScreenRecording)")
+        // print("\n--- SCREEN RECORDING PERMISSION CHECK ---")
+        // print("CGPreflightScreenCaptureAccess() = \(hasScreenRecording)")
         
         if !hasScreenRecording {
-            print("Requesting screen recording permission...")
+            // print("Requesting screen recording permission...")
             let granted = CGRequestScreenCaptureAccess()
-            print("CGRequestScreenCaptureAccess() = \(granted)")
+            // print("CGRequestScreenCaptureAccess() = \(granted)")
             
             if !granted {
-                print("")
-                print("⚠️  Screen Recording permission is REQUIRED to stream the screen.")
-                print("")
-                print("Since you're running from Terminal, you need to grant permission to TERMINAL:")
-                print("  1. Open System Settings > Privacy & Security > Screen Recording")
-                print("  2. Find 'Terminal' (or your terminal app: iTerm, Warp, etc.)")
-                print("  3. Toggle it ON")
-                print("  4. RESTART Terminal completely (Cmd+Q, then reopen)")
-                print("  5. Run the server again")
-                print("")
-                print("If Terminal is not listed, this request should have added it.")
-                print("Check System Settings now and look for Terminal.")
-                print("---------------------------------------------\n")
+                // print("")
+                // print("⚠️  Screen Recording permission is REQUIRED to stream the screen.")
+                // print("")
+                // print("Since you're running from Terminal, you need to grant permission to TERMINAL:")
+                // print("  1. Open System Settings > Privacy & Security > Screen Recording")
+                // print("  2. Find 'Terminal' (or your terminal app: iTerm, Warp, etc.)")
+                // print("  3. Toggle it ON")
+                // print("  4. RESTART Terminal completely (Cmd+Q, then reopen)")
+                // print("  5. Run the server again")
+                // print("")
+                // print("If Terminal is not listed, this request should have added it.")
+                // print("Check System Settings now and look for Terminal.")
+                // print("---------------------------------------------\n")
             } else {
-                print("✓ Screen Recording permission granted.")
+                // print("✓ Screen Recording permission granted.")
             }
         } else {
-            print("✓ Screen Recording permission already granted.")
+            // print("✓ Screen Recording permission already granted.")
         }
-        print("-----------------------------------------\n")
+        // print("-----------------------------------------\n")
         
         // Check for accessibility permissions (required for keyboard events)
         if !hasAccessibilityPermission {
@@ -264,16 +264,16 @@ class Server {
             hasAccessibilityPermission = AXIsProcessTrustedWithOptions(options)
 
             if !hasAccessibilityPermission {
-                print("\n--- ACCESSIBILITY PERMISSION REQUIRED ---")
-                print("⚠️  This application needs Accessibility permissions to simulate keyboard events.")
-                print("Please go to System Settings > Privacy & Security > Accessibility")
-                print("and enable it for 'Server'.")
-                print("-----------------------------------------\n")
+                // print("\n--- ACCESSIBILITY PERMISSION REQUIRED ---")
+                // print("⚠️  This application needs Accessibility permissions to simulate keyboard events.")
+                // print("Please go to System Settings > Privacy & Security > Accessibility")
+                // print("and enable it for 'Server'.")
+                // print("-----------------------------------------\n")
             } else {
-                print("✓ Accessibility permission granted.")
+                // print("✓ Accessibility permission granted.")
             }
         } else {
-            print("✓ Accessibility permission already granted.")
+            // print("✓ Accessibility permission already granted.")
         }
         
         listener.start(queue: .main)
@@ -289,7 +289,7 @@ class Server {
             listener.stateUpdateHandler = self.stateDidChange(to:)
             listener.newConnectionHandler = self.didAccept(nwConnection:)
         } catch {
-            print("Failed to rebuild listener: \(error). Exiting.")
+            // print("Failed to rebuild listener: \(error). Exiting.")
             exit(1)
         }
     }
@@ -297,9 +297,9 @@ class Server {
     private func stateDidChange(to newState: NWListener.State) {
         switch newState {
         case .ready:
-            print("Server ready and advertising on port \(listener.port?.debugDescription ?? "?")")
+            // print("Server ready and advertising on port \(listener.port?.debugDescription ?? "?")")
         case .failed(let error):
-            print("Server failed with error: \(error). Rebuilding listener...")
+            // print("Server failed with error: \(error). Rebuilding listener...")
             listener.cancel()
             // After cancel, listener cannot be reused - must create a new one
             rebuildListener()
@@ -430,7 +430,7 @@ class ServerConnection {
     private func stateDidChange(to state: NWConnection.State) {
         switch state {
         case .failed(let error):
-            print("Connection failed with error: \(error)")
+            // print("Connection failed with error: \(error)")
             self.stop(error: error)
         case .cancelled:
             self.stop(error: nil)
@@ -469,7 +469,7 @@ class ServerConnection {
     
     private func startVideoStream() {
         guard #available(macOS 12.3, *) else {
-            print("Video streaming requires macOS 12.3 or later")
+            // print("Video streaming requires macOS 12.3 or later")
             return
         }
         guard screenCapturer == nil else { return }
@@ -485,7 +485,7 @@ class ServerConnection {
             do {
                 try await capturer.startCapture()
             } catch {
-                print("Failed to start screen capture: \(error)")
+                // print("Failed to start screen capture: \(error)")
             }
         }
     }
@@ -524,7 +524,7 @@ class ServerConnection {
         
         nwConnection.send(content: frameData, completion: .contentProcessed { error in
             if let error = error {
-                print("[SEND] ERROR sending frame: \(error)")
+                // print("[SEND] ERROR sending frame: \(error)")
             }
         })
     }
