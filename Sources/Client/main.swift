@@ -175,16 +175,6 @@ class KVMController: ObservableObject {
     // Clipboard sync
     private let clipboardSync = ClipboardSyncManager()
     
-    // Edge detection state
-    private var lastEdgeCrossingTime: TimeInterval = 0
-    private var edgeMissLogCounter: Int = 0
-    private var mouseEventCounter: Int = 0
-    private var lastLoggedState: Bool? = nil
-    private var edgeDetector = EdgeDetector()  // Shared edge detector for consistent behavior
-    private var lastServerActivityTime: TimeInterval = 0  // Track last server activity for timeout fallback
-    private var serverTimeoutCheckTimer: Timer?
-    private let serverTimeoutSeconds: TimeInterval = 5.0  // Release control if no server traffic for N seconds
-    
     // Note: Magic Mouse swipes are scroll wheel events with phases, not .swipe events.
     // They are captured by the CGEvent tap and forwarded as RemoteMouseEvent with scrollPhase.
     // NSEvent gesture monitors (.swipe) only work for trackpad, not Magic Mouse.
@@ -303,10 +293,6 @@ class KVMController: ObservableObject {
         cursorLockTimer?.invalidate()
         cursorLockTimer = nil
         
-        // Stop server timeout check timer
-        serverTimeoutCheckTimer?.invalidate()
-        serverTimeoutCheckTimer = nil
-        
         // Stop clipboard sync
         clipboardSync.stopPolling()
         
@@ -326,45 +312,6 @@ class KVMController: ObservableObject {
         // print("KVMController resources cleaned up.")
     }
     
-    /// Start checking for server timeout (fallback to release control if server stops responding)
-    private func startServerTimeoutCheck() {
-        serverTimeoutCheckTimer?.invalidate()
-        lastServerActivityTime = CACurrentMediaTime()
-        
-        serverTimeoutCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self, self.isControllingRemote else { return }
-            
-            let now = CACurrentMediaTime()
-            let timeSinceActivity = now - self.lastServerActivityTime
-            
-            if timeSinceActivity >= self.serverTimeoutSeconds {
-                if EdgeDetectionConfig.isDebugEnabled {
-                    print("[EDGE-CLIENT] Server timeout (\(timeSinceActivity)s), releasing control")
-                    fflush(stdout)
-                }
-                
-                // Force release control
-                DispatchQueue.main.async {
-                    self.isControllingRemote = false
-                    // Warp local cursor slightly inside the left edge
-                    if let screen = DisplayGeometry.leftmostScreen {
-                        let warpX = screen.frame.minX + EdgeDetectionConfig.edgeInset + 2
-                        let warpY = screen.frame.midY
-                        CGWarpMouseCursorPosition(CGPoint(x: warpX, y: warpY))
-                    }
-                    self.lastEdgeCrossingTime = now
-                    self.edgeDetector.recordWarp(at: now)
-                }
-            }
-        }
-    }
-    
-    /// Stop server timeout check
-    private func stopServerTimeoutCheck() {
-        serverTimeoutCheckTimer?.invalidate()
-        serverTimeoutCheckTimer = nil
-    }
-    
     func toggleRemoteControl() {
         // Only allow controlling remote if we have a connection
         guard connection?.state == .ready else {
@@ -381,38 +328,26 @@ class KVMController: ObservableObject {
     
     /// Enter remote control and warp server cursor to right edge
     private func enterRemoteControl() {
-        // print("[EDGE-CLIENT] enterRemoteControl() called")
-        // fflush(stdout)
-        
         guard connection?.state == .ready else {
-            // print("[EDGE-CLIENT] ERROR: Connection not ready")
-            // fflush(stdout)
             return
         }
         guard !isControllingRemote else {
-            // print("[EDGE-CLIENT] WARNING: Already controlling remote")
-            // fflush(stdout)
             return
         }
         
         // Get current cursor position
         let currentPos = CGEvent(source: nil)?.location ?? CGPoint(x: 0, y: NSScreen.main?.frame.midY ?? 500)
-        // print("[EDGE-CLIENT] Current cursor: \(currentPos)")
         
         // Use main screen for Y mapping since cursor is at edge (may not be "inside" any screen)
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let clientScreenSize = screen.frame.size
-        
-        // print("[EDGE-CLIENT] Client screen: \(screen.frame)")
-        // print("[EDGE-CLIENT] Server screen size: \(serverScreenSize)")
-        // print("[EDGE-CLIENT] Virtual display mode: \(isVirtualDisplayMode)")
         
         // Map Y position proportionally from client to server screen
         // Clamp Y to screen bounds for safety
         let clampedY = max(screen.frame.minY, min(currentPos.y, screen.frame.maxY))
         let yRatio = (clampedY - screen.frame.minY) / clientScreenSize.height
         let serverY = yRatio * serverScreenSize.height
-        // Warp to 20 points inside the right edge to avoid immediate edge trigger
+        // Warp to 20 points inside the right edge
         // For virtual display, this is relative to 0,0 (server will translate to virtual display frame)
         let serverX = serverScreenSize.width - 20.0
         
@@ -424,12 +359,6 @@ class KVMController: ObservableObject {
         
         // Enter remote control mode
         isControllingRemote = true
-        
-        // Start timeout check as a fallback in case server edge detection fails
-        startServerTimeoutCheck()
-        
-        // print("[EDGE-CLIENT] ===== ENTERED REMOTE MODE =====")
-        // fflush(stdout)
     }
     
     // MARK: - Networking
@@ -715,9 +644,6 @@ class KVMController: ObservableObject {
     }
     
     private func handleServerMessage(_ data: Data) {
-        // Track server activity for timeout fallback
-        lastServerActivityTime = CACurrentMediaTime()
-        
         guard let event = try? JSONDecoder().decode(RemoteInputEvent.self, from: data) else {
             // Not a JSON message, might be partial video data that got misinterpreted
             return
@@ -769,29 +695,15 @@ class KVMController: ObservableObject {
             }
             
         case .controlRelease:
-            // print("[EDGE-CLIENT] ===== RECEIVED CONTROL RELEASE =====")
-            // fflush(stdout)
             DispatchQueue.main.async {
                 self.isControllingRemote = false
                 
-                // Stop server timeout check
-                self.stopServerTimeoutCheck()
-                
-                // Warp local cursor slightly inside the left edge
-                let leftmostScreen = DisplayGeometry.leftmostScreen
-                if let screen = leftmostScreen {
-                    let warpX = screen.frame.minX + EdgeDetectionConfig.edgeInset + 2
+                // Warp local cursor to screen center
+                if let screen = NSScreen.main {
+                    let warpX = screen.frame.midX
                     let warpY = screen.frame.midY
                     CGWarpMouseCursorPosition(CGPoint(x: warpX, y: warpY))
-                    // print("[EDGE-CLIENT] Warped local cursor to: (\(warpX), \(warpY))")
                 }
-                
-                // Record warp time to suppress immediate re-trigger
-                let now = CACurrentMediaTime()
-                self.lastEdgeCrossingTime = now
-                self.edgeDetector.recordWarp(at: now)
-                // print("[EDGE-CLIENT] ===== EXITED REMOTE MODE =====")
-                // fflush(stdout)
             }
             
         case .clipboard(let payload):
@@ -986,38 +898,27 @@ class KVMController: ObservableObject {
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Handle tap disabled event (system can disable taps if they take too long)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            // print("Event tap was disabled, re-enabling...")
             if let eventTap = eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
             return Unmanaged.passUnretained(event)
         }
         
-        // Toggle combo: Ctrl+Shift+Escape (fallback release hotkey, always enabled)
+        // Toggle combo: Ctrl+Shift+Escape (toggle remote control)
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
         let isEscapeDown = (type == .keyDown && keyCode == Int64(toggleKeyCode))
         let hasCtrlShift = flags.contains(.maskControl) && flags.contains(.maskShift)
         
         if isEscapeDown && hasCtrlShift {
-            if EdgeDetectionConfig.isDebugEnabled {
-                print("[EDGE-CLIENT] Toggle combo (Ctrl+Shift+Escape) detected!")
-                fflush(stdout)
-            }
-            
             if isControllingRemote {
                 // Release control immediately
                 DispatchQueue.main.async {
                     self.isControllingRemote = false
-                    // Warp local cursor slightly inside the left edge
-                    if let screen = DisplayGeometry.leftmostScreen {
-                        let warpX = screen.frame.minX + EdgeDetectionConfig.edgeInset + 2
-                        let warpY = screen.frame.midY
-                        CGWarpMouseCursorPosition(CGPoint(x: warpX, y: warpY))
+                    // Warp local cursor to screen center
+                    if let screen = NSScreen.main {
+                        CGWarpMouseCursorPosition(CGPoint(x: screen.frame.midX, y: screen.frame.midY))
                     }
-                    let now = CACurrentMediaTime()
-                    self.lastEdgeCrossingTime = now
-                    self.edgeDetector.recordWarp(at: now)
                 }
                 return nil // Consume the event
             } else if connection?.state == .ready {
@@ -1029,62 +930,10 @@ class KVMController: ObservableObject {
             }
         }
         
-        // Left edge detection: enter remote control when cursor hits left edge
+        // If not controlling remote, pass through all events
         if !isControllingRemote {
-            // // Log state change
-            // if lastLoggedState != false {
-            //     print("[CLIENT] State: LOCAL MODE (not controlling remote)")
-            //     print("[CLIENT] Available screens: \(NSScreen.screens.map { "\($0.frame)" }.joined(separator: ", "))")
-            //     fflush(stdout)
-            //     lastLoggedState = false
-            // }
-            
-            let isMouseMoveEvent = [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
-            if isMouseMoveEvent {
-                mouseEventCounter += 1
-                
-                // Check connection state
-                let connState = connection?.state
-                guard connState == .ready else {
-                    return Unmanaged.passUnretained(event)
-                }
-                
-                let now = CACurrentMediaTime()
-                let location = event.location
-                let deltaX = Double(event.getIntegerValueField(.mouseEventDeltaX))
-                
-                // Use DisplayGeometry to find the screen containing the point
-                // Fall back to leftmost screen if cursor is between displays
-                let currentScreen = DisplayGeometry.screen(containing: location) ?? DisplayGeometry.leftmostScreen
-                
-                guard currentScreen != nil else {
-                    return Unmanaged.passUnretained(event)
-                }
-                
-                // Use the shared EdgeDetector to check for left edge hit
-                // This gates on the global left edge to avoid triggering on interior seams
-                let globalLeftEdge = DisplayGeometry.globalLeftEdge
-                
-                if edgeDetector.shouldEnterRemote(now: now, point: location, deltaX: deltaX, globalLeftEdge: globalLeftEdge) {
-                    lastEdgeCrossingTime = now
-                    if EdgeDetectionConfig.isDebugEnabled {
-                        print("[EDGE-CLIENT] ===== LEFT EDGE HIT =====")
-                        print("[EDGE-CLIENT] location: \(location), deltaX: \(deltaX), globalLeftEdge: \(globalLeftEdge)")
-                        fflush(stdout)
-                    }
-                    DispatchQueue.main.async { self.enterRemoteControl() }
-                    return nil
-                }
-            }
             return Unmanaged.passUnretained(event)
         }
-        
-        // // Log state change to remote mode
-        // if lastLoggedState != true {
-        //     print("[CLIENT] State: REMOTE MODE (controlling remote, forwarding events)")
-        //     fflush(stdout)
-        //     lastLoggedState = true
-        // }
         
         // If we're controlling remote, forward events
         let isMouseEvent = [
@@ -1094,7 +943,6 @@ class KVMController: ObservableObject {
         ].contains(type)
         
         if isMouseEvent {
-            mouseEventCounter += 1
             let screenSize = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
             
             // Log scroll wheel events with phase info
