@@ -174,7 +174,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         // Use configured dimensions for virtual display, otherwise use display's native resolution
         let captureWidth: Int
         let captureHeight: Int
-        if foundVirtualDisplay, let w = targetWidth, let h = targetHeight {
+        if let w = targetWidth, let h = targetHeight {
             captureWidth = w
             captureHeight = h
         } else {
@@ -913,13 +913,13 @@ class ServerConnection {
                 
                 let screenSize = getActiveScreenSize()
                 
-                if let cgEvent = mouseEvent.toCGEvent(displayFrame: displayFrame) {
-                    cgEvent.post(tap: .cgSessionEventTap)
+                if let cgEvent = mouseEvent.toCGEvent(displayFrame: self.displayFrame) {
+                    cgEvent.post(tap: CGEventTapLocation.cgSessionEventTap)
                     
                     // Log that we posted the event
                     if mouseEvent.eventType == .scrollWheel {
-                        let postedPhase = cgEvent.getIntegerValueField(.scrollWheelEventScrollPhase)
-                        let postedMomentum = cgEvent.getIntegerValueField(.scrollWheelEventMomentumPhase)
+                        let postedPhase = cgEvent.getIntegerValueField(CGEventField.scrollWheelEventScrollPhase)
+                        let postedMomentum = cgEvent.getIntegerValueField(CGEventField.scrollWheelEventMomentumPhase)
                         print("[SERVER-POST] ScrollWheel posted: phase=\(postedPhase) momentum=\(postedMomentum)")
                         fflush(stdout)
                     }
@@ -934,10 +934,10 @@ class ServerConnection {
                 
             case .warpCursor(let warpEvent):
                 // Adjust warp position for virtual display frame
-                let displayFrame = getActiveDisplayFrame()
+                let activeDisplayFrame = getActiveDisplayFrame()
                 let point = CGPoint(
-                    x: displayFrame.minX + warpEvent.x,
-                    y: displayFrame.minY + warpEvent.y
+                    x: activeDisplayFrame.minX + warpEvent.x,
+                    y: activeDisplayFrame.minY + warpEvent.y
                 )
                 CGWarpMouseCursorPosition(point)
                 print("[Server] Warp cursor to: \(point) (virtual frame: \(isVirtualDisplayMode))")
@@ -1086,6 +1086,25 @@ class ServerConnection {
         let width = CGDisplayPixelsWide(mainDisplayID)
         let height = CGDisplayPixelsHigh(mainDisplayID)
         return CGSize(width: width, height: height)
+    }
+    
+    private func getActiveScreenSize() -> CGSize {
+        if isVirtualDisplayMode, let frame = virtualDisplayFrame {
+            return CGSize(width: frame.width, height: frame.height)
+        }
+        return getMainScreenSize()
+    }
+    
+    private func getActiveDisplayFrame() -> DisplayFrame {
+        if let frame = virtualDisplayFrame {
+            return frame
+        }
+        let mainBounds = CGDisplayBounds(CGMainDisplayID())
+        return DisplayFrame(rect: mainBounds)
+    }
+    
+    private var displayFrame: DisplayFrame {
+        return getActiveDisplayFrame()
     }
 
     private func stop(error: Error?) {

@@ -737,10 +737,17 @@ class KVMController: ObservableObject {
         case .clipboard(let payload):
             clipboardSync.apply(payload: payload)
             
-        case .keyboard, .mouse, .gesture, .warpCursor, .startVideoStream, .stopVideoStream:
+        case .keyboard, .mouse, .gesture, .warpCursor, .startVideoStream, .stopVideoStream, .clientDesiredDisplayMode:
             // These are client-to-server events, ignore
             break
         }
+    }
+    
+    /// Called when server screen size changes to update video layer dimensions
+    private func updateVideoLayerSize() {
+        // Video layer uses autoresizingMask for automatic resizing
+        // This method triggers a layout pass if needed
+        videoLayer.setNeedsLayout()
     }
 
     func send(event: RemoteInputEvent) {
