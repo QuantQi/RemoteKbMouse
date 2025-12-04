@@ -27,15 +27,31 @@ class VirtualDisplayManager {
         // Clean up existing display first
         destroyDisplay()
         
+        // Log system info
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        print("[VirtualDisplay] macOS version: \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)")
+        print("[VirtualDisplay] Requesting: \(mode.width)x\(mode.height)@\(mode.refreshRate ?? 60)Hz")
+        
         // Try to create virtual display using runtime API
         // CGVirtualDisplay is a private API, so we need to use dynamic loading
-        guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
-              let displayClass = NSClassFromString("CGVirtualDisplay") as? NSObject.Type,
-              let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
-              let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else {
-            print("[VirtualDisplay] CGVirtualDisplay API not available")
+        guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type else {
+            print("[VirtualDisplay] ❌ CGVirtualDisplayDescriptor class not found - virtual displays not supported")
             return false
         }
+        guard let displayClass = NSClassFromString("CGVirtualDisplay") as? NSObject.Type else {
+            print("[VirtualDisplay] ❌ CGVirtualDisplay class not found - virtual displays not supported")
+            return false
+        }
+        guard let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type else {
+            print("[VirtualDisplay] ❌ CGVirtualDisplaySettings class not found")
+            return false
+        }
+        guard let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else {
+            print("[VirtualDisplay] ❌ CGVirtualDisplayMode class not found")
+            return false
+        }
+        
+        print("[VirtualDisplay] ✅ All required classes found")
         
         // Create descriptor
         let descriptor = descriptorClass.init()
@@ -46,19 +62,25 @@ class VirtualDisplayManager {
         descriptor.setValue(0x1234, forKey: "productID")
         descriptor.setValue(0x5678, forKey: "vendorID")
         descriptor.setValue(0x0001, forKey: "serialNum")
+        print("[VirtualDisplay] Descriptor created: \(mode.width)x\(mode.height)")
         
-        // Create virtual display
-        guard let displayInit = displayClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() as? NSObject,
-              let display = displayInit.perform(NSSelectorFromString("initWithDescriptor:"), with: descriptor)?.takeUnretainedValue() as? NSObject else {
-            print("[VirtualDisplay] Failed to create CGVirtualDisplay instance")
+        // Create virtual display instance
+        guard let displayInit = displayClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() as? NSObject else {
+            print("[VirtualDisplay] ❌ Failed to alloc CGVirtualDisplay")
             return false
         }
+        guard let display = displayInit.perform(NSSelectorFromString("initWithDescriptor:"), with: descriptor)?.takeUnretainedValue() as? NSObject else {
+            print("[VirtualDisplay] ❌ Failed to init CGVirtualDisplay with descriptor")
+            return false
+        }
+        print("[VirtualDisplay] ✅ CGVirtualDisplay instance created")
         
         // Get display ID
-        guard let displayIDValue = display.value(forKey: "displayID") as? UInt32 else {
-            print("[VirtualDisplay] Failed to get display ID")
+        guard let displayIDValue = display.value(forKey: "displayID") as? UInt32, displayIDValue != 0 else {
+            print("[VirtualDisplay] ❌ Failed to get valid display ID")
             return false
         }
+        print("[VirtualDisplay] ✅ Display ID: \(displayIDValue)")
         
         // Create mode
         let refreshRate = mode.refreshRate ?? 60
@@ -66,6 +88,7 @@ class VirtualDisplayManager {
         modeObject.setValue(mode.width, forKey: "width")
         modeObject.setValue(mode.height, forKey: "height")
         modeObject.setValue(Double(refreshRate), forKey: "refreshRate")
+        print("[VirtualDisplay] Mode configured: \(mode.width)x\(mode.height)@\(refreshRate)Hz")
         
         // Create settings
         let settings = settingsClass.init()
@@ -73,7 +96,8 @@ class VirtualDisplayManager {
         settings.setValue([modeObject], forKey: "modes")
         
         // Apply settings
-        _ = display.perform(NSSelectorFromString("applySettings:"), with: settings)
+        let applyResult = display.perform(NSSelectorFromString("applySettings:"), with: settings)
+        print("[VirtualDisplay] Settings applied, result: \(String(describing: applyResult))")
         
         virtualDisplayObject = display
         displayID = displayIDValue
@@ -82,6 +106,7 @@ class VirtualDisplayManager {
         // Query the actual display frame from CoreGraphics
         // This gives us the real position where macOS placed the virtual display
         displayFrame = CGDisplayBounds(displayIDValue)
+        print("[VirtualDisplay] CGDisplayBounds returned: \(displayFrame)")
         
         // If CGDisplayBounds returns zero (display not yet registered), estimate position
         if displayFrame.isEmpty || (displayFrame.width == 0 && displayFrame.height == 0) {
@@ -93,10 +118,10 @@ class VirtualDisplayManager {
                 width: CGFloat(mode.width),
                 height: CGFloat(mode.height)
             )
-            print("[VirtualDisplay] Using estimated frame (display not yet registered)")
+            print("[VirtualDisplay] ⚠️ Display not yet registered with CoreGraphics, using estimated frame")
         }
         
-        print("[VirtualDisplay] Created: ID=\(displayID), mode=\(mode.width)x\(mode.height)@\(refreshRate)Hz")
+        print("[VirtualDisplay] ✅ Created successfully: ID=\(displayID), mode=\(mode.width)x\(mode.height)@\(refreshRate)Hz")
         print("[VirtualDisplay] Frame: \(displayFrame)")
         
         return true
