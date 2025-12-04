@@ -557,6 +557,7 @@ class ServerConnection {
     private var isReceivingRemoteInput: Bool = false
     private var warpCursorTime: TimeInterval = 0  // Time of last warp, skip edge checks briefly after
     private var isCursorHidden: Bool = false  // Track cursor visibility
+    private var edgeDetector = EdgeDetector()  // Shared edge detector for consistent behavior
 
     init(nwConnection: NWConnection) {
         self.nwConnection = nwConnection
@@ -911,9 +912,10 @@ class ServerConnection {
                     fflush(stdout)
                 }
                 
-                let screenSize = getActiveScreenSize()
-                
                 if let cgEvent = mouseEvent.toCGEvent(displayFrame: self.displayFrame) {
+                    // Get the final clamped position from the event BEFORE posting
+                    let finalPoint = cgEvent.location
+                    
                     cgEvent.post(tap: CGEventTapLocation.cgSessionEventTap)
                     
                     // Log that we posted the event
@@ -924,7 +926,9 @@ class ServerConnection {
                         fflush(stdout)
                     }
                     
-                    checkRightEdge(screenSize: screenSize, deltaX: mouseEvent.deltaX)
+                    // Use the clamped position from the event for edge detection
+                    // This removes the race on CGEvent(source: nil)?.location
+                    checkRightEdge(point: finalPoint)
                 }
                 
             case .gesture(let gestureEvent):
@@ -941,8 +945,10 @@ class ServerConnection {
                 )
                 CGWarpMouseCursorPosition(point)
                 print("[Server] Warp cursor to: \(point) (virtual frame: \(isVirtualDisplayMode))")
-                // Skip edge checks for 500ms after warp to let mouse events settle
-                warpCursorTime = CACurrentMediaTime()
+                // Record warp time to skip edge checks briefly and reset edge detector grace period
+                let now = CACurrentMediaTime()
+                warpCursorTime = now
+                edgeDetector.recordWarp(at: now)
                 // Show cursor - server now has control
                 showCursor()
                 
@@ -1053,32 +1059,64 @@ class ServerConnection {
         }
     }
     
-    private func checkRightEdge(screenSize: CGSize, deltaX: Double = 0) {
-        // Skip edge checks for 500ms after warp to let mouse events settle
+    private func checkRightEdge(point: CGPoint) {
         let now = CACurrentMediaTime()
-        let timeSinceWarp = now - warpCursorTime
-        if timeSinceWarp < 0.5 {
-            edgeMissLogCounter += 1
-            return
-        }
         
-        guard let currentPos = CGEvent(source: nil)?.location else {
-            return
-        }
+        // Get the appropriate display frame for edge detection
+        let display = displayFrameFor(point: point)
         
-        let timeSinceLastRelease = now - lastEdgeReleaseTime
-        let cooldownPassed = timeSinceLastRelease >= EdgeDetectionConfig.cooldownSeconds
-        
-        // Use display frame for edge detection
-        let isAtRightEdge = displayFrame.isAtRightEdge(currentPos.x)
-        
-        if isAtRightEdge && cooldownPassed {
+        if edgeDetector.shouldRelease(now: now, point: point, displayMaxX: display.maxX) {
             lastEdgeReleaseTime = now
-            print("[Server] Right edge hit at x=\(currentPos.x), releasing control")
+            if EdgeDetectionConfig.isDebugEnabled {
+                print("[Server] Right edge hit at x=\(point.x), displayMaxX=\(display.maxX), releasing control")
+                fflush(stdout)
+            }
             sendControlRelease()
         } else {
             edgeMissLogCounter += 1
+            if EdgeDetectionConfig.isDebugEnabled && edgeMissLogCounter % EdgeDetectionConfig.logEveryNthMiss == 0 {
+                print("[Server] Edge check miss #\(edgeMissLogCounter): x=\(point.x), displayMaxX=\(display.maxX)")
+                fflush(stdout)
+            }
         }
+    }
+    
+    /// Get the display frame for edge detection at a given point.
+    /// When virtual display is active, returns that frame.
+    /// Otherwise finds the display containing the point, falling back to rightmost display.
+    private func displayFrameFor(point: CGPoint) -> DisplayFrame {
+        // If virtual display is active, use its frame
+        if isVirtualDisplayMode, let frame = virtualDisplayFrame {
+            return frame
+        }
+        
+        // Find the display containing the point using CGDisplayBounds
+        var displayCount: UInt32 = 0
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: 16)
+        
+        if CGGetActiveDisplayList(16, &displayIDs, &displayCount) == .success && displayCount > 0 {
+            // Find display containing the point
+            for i in 0..<Int(displayCount) {
+                let bounds = CGDisplayBounds(displayIDs[i])
+                if bounds.contains(point) {
+                    return DisplayFrame(rect: bounds)
+                }
+            }
+            
+            // If no display contains the point, use the rightmost display
+            // so the release edge is the outermost boundary
+            var rightmostBounds = CGDisplayBounds(displayIDs[0])
+            for i in 1..<Int(displayCount) {
+                let bounds = CGDisplayBounds(displayIDs[i])
+                if bounds.maxX > rightmostBounds.maxX {
+                    rightmostBounds = bounds
+                }
+            }
+            return DisplayFrame(rect: rightmostBounds)
+        }
+        
+        // Fallback to main display
+        return DisplayFrame(rect: CGDisplayBounds(CGMainDisplayID()))
     }
     
     private func getMainScreenSize() -> CGSize {
