@@ -32,99 +32,112 @@ class VirtualDisplayManager {
         print("[VirtualDisplay] macOS version: \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)")
         print("[VirtualDisplay] Requesting: \(mode.width)x\(mode.height)@\(mode.refreshRate ?? 60)Hz")
         
-        // Try to create virtual display using runtime API
-        // CGVirtualDisplay is a private API, so we need to use dynamic loading
-        guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type else {
-            print("[VirtualDisplay] ❌ CGVirtualDisplayDescriptor class not found - virtual displays not supported")
-            return false
-        }
-        guard let displayClass = NSClassFromString("CGVirtualDisplay") as? NSObject.Type else {
-            print("[VirtualDisplay] ❌ CGVirtualDisplay class not found - virtual displays not supported")
-            return false
-        }
-        guard let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type else {
-            print("[VirtualDisplay] ❌ CGVirtualDisplaySettings class not found")
-            return false
-        }
-        guard let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else {
-            print("[VirtualDisplay] ❌ CGVirtualDisplayMode class not found")
+        // Check if CGVirtualDisplay classes exist
+        guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
+              let displayClass = NSClassFromString("CGVirtualDisplay"),
+              let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
+              let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else {
+            print("[VirtualDisplay] ❌ CGVirtualDisplay API not available on this macOS version")
             return false
         }
         
         print("[VirtualDisplay] ✅ All required classes found")
         
-        // Create descriptor
-        let descriptor = descriptorClass.init()
-        descriptor.setValue("RemoteKVM Virtual Display", forKey: "name")
-        descriptor.setValue(mode.width, forKey: "maxPixelsWide")
-        descriptor.setValue(mode.height, forKey: "maxPixelsHigh")
-        descriptor.setValue(CGSize(width: 600, height: 340), forKey: "sizeInMillimeters")
-        descriptor.setValue(0x1234, forKey: "productID")
-        descriptor.setValue(0x5678, forKey: "vendorID")
-        descriptor.setValue(0x0001, forKey: "serialNum")
-        print("[VirtualDisplay] Descriptor created: \(mode.width)x\(mode.height)")
-        
-        // Create virtual display instance
-        guard let displayInit = displayClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() as? NSObject else {
-            print("[VirtualDisplay] ❌ Failed to alloc CGVirtualDisplay")
+        do {
+            // Create descriptor using KVC (safer than perform selectors)
+            let descriptor = descriptorClass.init()
+            descriptor.setValue("RemoteKVM Virtual Display", forKey: "name")
+            descriptor.setValue(mode.width, forKey: "maxPixelsWide")
+            descriptor.setValue(mode.height, forKey: "maxPixelsHigh")
+            descriptor.setValue(CGSize(width: 600, height: 340), forKey: "sizeInMillimeters")
+            descriptor.setValue(UInt32(0x1234), forKey: "productID")
+            descriptor.setValue(UInt32(0x5678), forKey: "vendorID")
+            descriptor.setValue(UInt32(0x0001), forKey: "serialNum")
+            print("[VirtualDisplay] Descriptor created")
+            
+            // Use objc_msgSend alternative - allocate and init via NSInvocation pattern
+            // Actually, let's use a simpler approach with direct class method if available
+            let allocSel = NSSelectorFromString("alloc")
+            let initSel = NSSelectorFromString("initWithDescriptor:")
+            
+            guard displayClass.responds(to: allocSel) else {
+                print("[VirtualDisplay] ❌ CGVirtualDisplay doesn't respond to alloc")
+                return false
+            }
+            
+            // Use safer memory management
+            let allocated = (displayClass as AnyObject).perform(allocSel)?.takeRetainedValue()
+            guard let allocatedObj = allocated as? NSObject else {
+                print("[VirtualDisplay] ❌ Failed to allocate CGVirtualDisplay")
+                return false
+            }
+            
+            guard allocatedObj.responds(to: initSel) else {
+                print("[VirtualDisplay] ❌ CGVirtualDisplay doesn't respond to initWithDescriptor:")
+                return false
+            }
+            
+            let initialized = allocatedObj.perform(initSel, with: descriptor)?.takeRetainedValue()
+            guard let display = initialized as? NSObject else {
+                print("[VirtualDisplay] ❌ Failed to init CGVirtualDisplay")
+                return false
+            }
+            
+            print("[VirtualDisplay] ✅ CGVirtualDisplay instance created")
+            
+            // Get display ID using KVC
+            guard let displayIDValue = display.value(forKey: "displayID") as? UInt32, displayIDValue != 0 else {
+                print("[VirtualDisplay] ❌ Failed to get valid display ID")
+                return false
+            }
+            print("[VirtualDisplay] ✅ Display ID: \(displayIDValue)")
+            
+            // Create mode
+            let refreshRate = mode.refreshRate ?? 60
+            let modeObject = modeClass.init()
+            modeObject.setValue(mode.width, forKey: "width")
+            modeObject.setValue(mode.height, forKey: "height")
+            modeObject.setValue(Double(refreshRate), forKey: "refreshRate")
+            
+            // Create settings
+            let settings = settingsClass.init()
+            settings.setValue(1, forKey: "hiDPI")
+            settings.setValue([modeObject], forKey: "modes")
+            
+            // Apply settings
+            let applySel = NSSelectorFromString("applySettings:")
+            if display.responds(to: applySel) {
+                _ = display.perform(applySel, with: settings)
+                print("[VirtualDisplay] Settings applied")
+            } else {
+                print("[VirtualDisplay] ⚠️ applySettings: not available")
+            }
+            
+            virtualDisplayObject = display
+            displayID = displayIDValue
+            displayMode = mode
+            
+            // Query the actual display frame
+            displayFrame = CGDisplayBounds(displayIDValue)
+            
+            if displayFrame.isEmpty || displayFrame.width == 0 {
+                let mainBounds = CGDisplayBounds(CGMainDisplayID())
+                displayFrame = CGRect(
+                    x: mainBounds.maxX,
+                    y: mainBounds.minY,
+                    width: CGFloat(mode.width),
+                    height: CGFloat(mode.height)
+                )
+                print("[VirtualDisplay] ⚠️ Using estimated frame")
+            }
+            
+            print("[VirtualDisplay] ✅ Created: \(mode.width)x\(mode.height)@\(refreshRate)Hz, ID=\(displayID)")
+            return true
+            
+        } catch {
+            print("[VirtualDisplay] ❌ Exception: \(error)")
             return false
         }
-        guard let display = displayInit.perform(NSSelectorFromString("initWithDescriptor:"), with: descriptor)?.takeUnretainedValue() as? NSObject else {
-            print("[VirtualDisplay] ❌ Failed to init CGVirtualDisplay with descriptor")
-            return false
-        }
-        print("[VirtualDisplay] ✅ CGVirtualDisplay instance created")
-        
-        // Get display ID
-        guard let displayIDValue = display.value(forKey: "displayID") as? UInt32, displayIDValue != 0 else {
-            print("[VirtualDisplay] ❌ Failed to get valid display ID")
-            return false
-        }
-        print("[VirtualDisplay] ✅ Display ID: \(displayIDValue)")
-        
-        // Create mode
-        let refreshRate = mode.refreshRate ?? 60
-        let modeObject = modeClass.init()
-        modeObject.setValue(mode.width, forKey: "width")
-        modeObject.setValue(mode.height, forKey: "height")
-        modeObject.setValue(Double(refreshRate), forKey: "refreshRate")
-        print("[VirtualDisplay] Mode configured: \(mode.width)x\(mode.height)@\(refreshRate)Hz")
-        
-        // Create settings
-        let settings = settingsClass.init()
-        settings.setValue(1, forKey: "hiDPI") // hiDPIEnabled = 1
-        settings.setValue([modeObject], forKey: "modes")
-        
-        // Apply settings
-        let applyResult = display.perform(NSSelectorFromString("applySettings:"), with: settings)
-        print("[VirtualDisplay] Settings applied, result: \(String(describing: applyResult))")
-        
-        virtualDisplayObject = display
-        displayID = displayIDValue
-        displayMode = mode
-        
-        // Query the actual display frame from CoreGraphics
-        // This gives us the real position where macOS placed the virtual display
-        displayFrame = CGDisplayBounds(displayIDValue)
-        print("[VirtualDisplay] CGDisplayBounds returned: \(displayFrame)")
-        
-        // If CGDisplayBounds returns zero (display not yet registered), estimate position
-        if displayFrame.isEmpty || (displayFrame.width == 0 && displayFrame.height == 0) {
-            let mainDisplayID = CGMainDisplayID()
-            let mainBounds = CGDisplayBounds(mainDisplayID)
-            displayFrame = CGRect(
-                x: mainBounds.maxX,
-                y: mainBounds.minY,
-                width: CGFloat(mode.width),
-                height: CGFloat(mode.height)
-            )
-            print("[VirtualDisplay] ⚠️ Display not yet registered with CoreGraphics, using estimated frame")
-        }
-        
-        print("[VirtualDisplay] ✅ Created successfully: ID=\(displayID), mode=\(mode.width)x\(mode.height)@\(refreshRate)Hz")
-        print("[VirtualDisplay] Frame: \(displayFrame)")
-        
-        return true
     }
     
     /// Refresh the display frame from CoreGraphics (call after display registers)
