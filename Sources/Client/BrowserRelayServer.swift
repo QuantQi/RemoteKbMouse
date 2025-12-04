@@ -156,10 +156,20 @@ public class BrowserRelayServer {
             // Use a simple flag and polling approach since we're on main thread
             var listenerState: NWListener.State = .setup
             
-            newListener.stateUpdateHandler = { state in
+            newListener.stateUpdateHandler = { [weak self] state in
                 listenerState = state
-                if case .failed(let error) = state {
-                    print("[BrowserRelay] Port \(port) failed: \(error)")
+                switch state {
+                case .ready:
+                    print("[BrowserRelay] Listener ready on port \(port)")
+                case .failed(let error):
+                    print("[BrowserRelay] Listener failed on port \(port): \(error)")
+                    self?.stop()
+                case .cancelled:
+                    print("[BrowserRelay] Listener cancelled")
+                case .waiting(let error):
+                    print("[BrowserRelay] Listener waiting: \(error)")
+                default:
+                    break
                 }
             }
             
@@ -221,15 +231,23 @@ public class BrowserRelayServer {
     // MARK: - Connection Handling
     
     private func handleNewConnection(_ connection: NWConnection) {
+        print("[BrowserRelay] New connection from: \(connection.endpoint)")
         let client = WebSocketClient(connection: connection)
         let clientId = ObjectIdentifier(connection)
         
         connection.stateUpdateHandler = { [weak self, weak client] state in
             switch state {
             case .ready:
+                print("[BrowserRelay] Connection ready")
                 self?.startReceiving(client: client, clientId: clientId)
-            case .failed, .cancelled:
+            case .failed(let error):
+                print("[BrowserRelay] Connection failed: \(error)")
                 self?.removeClient(clientId)
+            case .cancelled:
+                print("[BrowserRelay] Connection cancelled")
+                self?.removeClient(clientId)
+            case .waiting(let error):
+                print("[BrowserRelay] Connection waiting: \(error)")
             default:
                 break
             }
@@ -243,6 +261,10 @@ public class BrowserRelayServer {
         
         client.connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self, weak client] data, _, isComplete, error in
             guard let self = self, let client = client else { return }
+            
+            if let error = error {
+                print("[BrowserRelay] Receive error: \(error)")
+            }
             
             if let data = data {
                 if client.isWebSocketUpgraded {
@@ -258,6 +280,9 @@ public class BrowserRelayServer {
             if !isComplete && error == nil {
                 self.startReceiving(client: client, clientId: clientId)
             } else if isComplete || error != nil {
+                if isComplete {
+                    print("[BrowserRelay] Connection completed")
+                }
                 self.removeClient(clientId)
             }
         }
