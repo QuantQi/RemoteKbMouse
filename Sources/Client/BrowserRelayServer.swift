@@ -1,5 +1,7 @@
 import Foundation
-import Swifter
+import NIO
+import NIOHTTP1
+import NIOWebSocket
 import AppKit
 
 // MARK: - Browser Relay Server
@@ -40,16 +42,44 @@ public class BrowserRelayServer {
         case hevc
     }
     
+    // MARK: - WebSocket wrapper
+    
+    fileprivate final class WebSocket {
+        let channel: Channel
+        var context: ChannelHandlerContext?
+        
+        init(channel: Channel) {
+            self.channel = channel
+        }
+        
+        func send(text: String) {
+            guard let ctx = context else { return }
+            var buffer = ctx.channel.allocator.buffer(capacity: text.utf8.count)
+            buffer.writeString(text)
+            let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
+            ctx.writeAndFlush(NIOAny(frame), promise: nil)
+        }
+        
+        func send(binary: [UInt8]) {
+            guard let ctx = context else { return }
+            var buffer = ctx.channel.allocator.buffer(capacity: binary.count)
+            buffer.writeBytes(binary)
+            let frame = WebSocketFrame(fin: true, opcode: .binary, data: buffer)
+            ctx.writeAndFlush(NIOAny(frame), promise: nil)
+        }
+    }
+    
     // MARK: - Properties
     
-    private var server: HttpServer?
-    private var webSocketSessions: [WebSocketSession] = []
-    private let sessionsLock = NSLock()
-    private var port: UInt16 = 8080
-    private var isRunning = false
+    private var group: EventLoopGroup?
+    private var channel: Channel?
+    private var webSockets: [ObjectIdentifier: WebSocket] = [:]
+    private let webSocketsLock = NSLock()
     private var cachedConfig: CodecConfig?
+    private var port: Int = 8080
+    private var isRunning = false
     
-    public var activePort: UInt16 { port }
+    public var activePort: UInt16 { UInt16(port) }
     public var url: String { "http://127.0.0.1:\(port)/" }
     
     // MARK: - Lifecycle
@@ -59,90 +89,103 @@ public class BrowserRelayServer {
     public func start(preferredPort: UInt16 = 8080) {
         guard !isRunning else { return }
         
-        let httpServer = HttpServer()
-        
-        // Serve HTML page at root
-        httpServer["/"] = { [weak self] _ in
-            guard let self = self else { return .notFound }
-            return .ok(.html(self.generateHTMLPage()))
-        }
-        
-        // WebSocket endpoint
-        httpServer["/ws"] = websocket(
-            text: { [weak self] session, text in
-                // Handle text messages (we don't expect any)
-//                 print("[BrowserRelay] Received text: \(text)")
-            },
-            binary: { session, data in
-                // Handle binary messages (we don't expect any)
-//                 print("[BrowserRelay] Received binary: \(data.count) bytes")
-            },
-            pong: { session, data in
-                // Pong received
-            },
-            connected: { [weak self] session in
-//                 print("[BrowserRelay] WebSocket client connected")
-                guard let self = self else { return }
-                
-                self.sessionsLock.lock()
-                self.webSocketSessions.append(session)
-                self.sessionsLock.unlock()
-                
-                // Send cached config if available
-                if let config = self.cachedConfig, let json = config.toJSON() {
-                    session.writeText(json)
-                }
-            },
-            disconnected: { [weak self] session in
-//                 print("[BrowserRelay] WebSocket client disconnected")
-                guard let self = self else { return }
-                
-                self.sessionsLock.lock()
-                self.webSocketSessions.removeAll { $0 === session }
-//                 print("[BrowserRelay] Remaining clients: \(self.webSocketSessions.count)")
-                self.sessionsLock.unlock()
-            }
-        )
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+        self.group = eventLoopGroup
         
         // Try ports starting from preferredPort
         for offset in 0..<100 {
-            let tryPort = preferredPort + UInt16(offset)
+            let tryPort = Int(preferredPort) + offset
             do {
-                try httpServer.start(tryPort, forceIPv4: true)
-                port = tryPort
-                server = httpServer
-                isRunning = true
-//                 print("[BrowserRelay] Started on http://127.0.0.1:\(port)/")
+                let bootstrap = makeServerBootstrap(group: eventLoopGroup)
+                let boundChannel = try bootstrap.bind(host: "127.0.0.1", port: tryPort).wait()
+                self.channel = boundChannel
+                self.port = tryPort
+                self.isRunning = true
                 
                 // Open browser
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     self?.openBrowser()
                 }
                 return
-            } catch SocketError.bindFailed(let msg) where msg.contains("Address already in use") {
-//                 print("[BrowserRelay] Port \(tryPort) in use, trying next...")
+            } catch let error as IOError where error.errnoCode == EADDRINUSE {
                 continue
             } catch {
-//                 print("[BrowserRelay] Port \(tryPort) failed: \(error)")
                 continue
             }
         }
+    }
+    
+    private func makeServerBootstrap(group: EventLoopGroup) -> ServerBootstrap {
+        let server = self
         
-//         print("[BrowserRelay] Failed to find available port")
+        return ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.backlog, value: 256)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { channel in
+                let httpHandler = HTTPHandler(server: server)
+                let upgrader = NIOWebSocketServerUpgrader(
+                    shouldUpgrade: { channel, head in
+                        channel.eventLoop.makeSucceededFuture(HTTPHeaders())
+                    },
+                    upgradePipelineHandler: { channel, req in
+                        server.handleWebSocketUpgrade(channel: channel)
+                    }
+                )
+                
+                let config: NIOHTTPServerUpgradeConfiguration = (
+                    upgraders: [upgrader],
+                    completionHandler: { ctx in
+                        // Remove HTTP handler after upgrade
+                        ctx.pipeline.removeHandler(httpHandler, promise: nil)
+                    }
+                )
+                
+                return channel.pipeline.configureHTTPServerPipeline(withServerUpgrade: config).flatMap {
+                    channel.pipeline.addHandler(httpHandler)
+                }
+            }
+            .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+    }
+    
+    private func handleWebSocketUpgrade(channel: Channel) -> EventLoopFuture<Void> {
+        let ws = WebSocket(channel: channel)
+        let handler = WebSocketHandler(server: self, webSocket: ws)
+        
+        return channel.pipeline.addHandler(handler).map {
+            let id = ObjectIdentifier(channel)
+            
+            self.webSocketsLock.lock()
+            self.webSockets[id] = ws
+            self.webSocketsLock.unlock()
+            
+            // Send cached config if available
+            if let config = self.cachedConfig, let json = config.toJSON() {
+                ws.send(text: json)
+            }
+            
+            // Remove on close
+            channel.closeFuture.whenComplete { [weak self] _ in
+                guard let self = self else { return }
+                self.webSocketsLock.lock()
+                self.webSockets.removeValue(forKey: id)
+                self.webSocketsLock.unlock()
+            }
+        }
     }
     
     public func stop() {
         guard isRunning else { return }
         isRunning = false
         
-        server?.stop()
-        server = nil
+        try? channel?.close().wait()
+        channel = nil
         
-        sessionsLock.lock()
-        webSocketSessions.removeAll()
-        sessionsLock.unlock()
+        try? group?.syncShutdownGracefully()
+        group = nil
         
-//         print("[BrowserRelay] Stopped")
+        webSocketsLock.lock()
+        webSockets.removeAll()
+        webSocketsLock.unlock()
     }
     
     private func openBrowser() {
@@ -158,28 +201,25 @@ public class BrowserRelayServer {
         
         guard let json = config.toJSON() else { return }
         
-        sessionsLock.lock()
-        let sessions = webSocketSessions
-        sessionsLock.unlock()
+        webSocketsLock.lock()
+        let sockets = Array(webSockets.values)
+        webSocketsLock.unlock()
         
-        for session in sessions {
-            session.writeText(json)
+        for ws in sockets {
+            ws.send(text: json)
         }
-        
-//         print("[BrowserRelay] Broadcast config: \(config.codec == .hevc ? "HEVC" : "H.264") \(config.width)x\(config.height)")
     }
     
     /// Broadcast a video frame to all connected clients
     /// Frame envelope: [1 byte flags][4 bytes timestamp ms][4 bytes payload length][NAL bytes...]
     /// Input is Annex-B format, output is AVCC format (length-prefixed)
     public func broadcastFrame(flags: UInt8, timestamp: UInt32, payload: Data) {
-        sessionsLock.lock()
-        let sessions = webSocketSessions
-        let clientCount = sessions.count
-        sessionsLock.unlock()
+        webSocketsLock.lock()
+        let sockets = Array(webSockets.values)
+        webSocketsLock.unlock()
         
         // Only broadcast if we have clients
-        guard clientCount > 0 else { return }
+        guard !sockets.isEmpty else { return }
         
         // Convert Annex-B to AVCC format
         let avccPayload = convertAnnexBToAVCC(payload)
@@ -204,8 +244,8 @@ public class BrowserRelayServer {
         envelope.append(avccPayload)
         
         let bytes = [UInt8](envelope)
-        for session in sessions {
-            session.writeBinary(bytes)
+        for ws in sockets {
+            ws.send(binary: bytes)
         }
     }
     
@@ -271,7 +311,7 @@ public class BrowserRelayServer {
     
     // MARK: - HTML Page Generation
     
-    private func generateHTMLPage() -> String {
+    fileprivate func generateHTMLPage() -> String {
         return """
         <!DOCTYPE html>
         <html>
@@ -470,6 +510,101 @@ public class BrowserRelayServer {
         </body>
         </html>
         """
+    }
+}
+
+// MARK: - HTTP Handler
+
+private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler {
+    typealias InboundIn = HTTPServerRequestPart
+    typealias OutboundOut = HTTPServerResponsePart
+    
+    private let server: BrowserRelayServer
+    private var requestHead: HTTPRequestHead?
+    
+    init(server: BrowserRelayServer) {
+        self.server = server
+    }
+    
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let part = unwrapInboundIn(data)
+        
+        switch part {
+        case .head(let head):
+            self.requestHead = head
+        case .body:
+            break
+        case .end:
+            guard let head = requestHead else { return }
+            
+            if head.method == .GET && head.uri == "/" {
+                let html = server.generateHTMLPage()
+                var buffer = context.channel.allocator.buffer(capacity: html.utf8.count)
+                buffer.writeString(html)
+                
+                var headers = HTTPHeaders()
+                headers.add(name: "Content-Type", value: "text/html; charset=utf-8")
+                headers.add(name: "Content-Length", value: "\(buffer.readableBytes)")
+                
+                let responseHead = HTTPResponseHead(version: head.version, status: .ok, headers: headers)
+                context.write(wrapOutboundOut(.head(responseHead)), promise: nil)
+                context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+                context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+            } else {
+                var headers = HTTPHeaders()
+                headers.add(name: "Content-Length", value: "0")
+                
+                let responseHead = HTTPResponseHead(version: head.version, status: .notFound, headers: headers)
+                context.write(wrapOutboundOut(.head(responseHead)), promise: nil)
+                context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+            }
+            
+            requestHead = nil
+        }
+    }
+}
+
+// MARK: - WebSocket Handler
+
+private final class WebSocketHandler: ChannelInboundHandler {
+    typealias InboundIn = WebSocketFrame
+    typealias OutboundOut = WebSocketFrame
+    
+    private let server: BrowserRelayServer
+    private let webSocket: BrowserRelayServer.WebSocket
+    
+    init(server: BrowserRelayServer, webSocket: BrowserRelayServer.WebSocket) {
+        self.server = server
+        self.webSocket = webSocket
+    }
+    
+    func handlerAdded(context: ChannelHandlerContext) {
+        webSocket.context = context
+    }
+    
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let frame = unwrapInboundIn(data)
+        
+        switch frame.opcode {
+        case .ping:
+            var frameData = frame.data
+            let pongData = frameData.readBytes(length: frameData.readableBytes) ?? []
+            var buffer = context.channel.allocator.buffer(capacity: pongData.count)
+            buffer.writeBytes(pongData)
+            let pongFrame = WebSocketFrame(fin: true, opcode: .pong, data: buffer)
+            context.writeAndFlush(wrapOutboundOut(pongFrame), promise: nil)
+        case .connectionClose:
+            context.close(promise: nil)
+        case .text, .binary:
+            // Ignore incoming data (we don't expect any)
+            break
+        default:
+            break
+        }
+    }
+    
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        context.close(promise: nil)
     }
 }
 

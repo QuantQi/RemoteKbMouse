@@ -13,7 +13,7 @@ let package = Package(
         .executable(name: "Client", targets: ["Client"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/httpswift/swifter.git", from: "1.5.0")
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.63.0")
     ],
     targets: [
         .target(
@@ -26,7 +26,9 @@ let package = Package(
             name: "Client",
             dependencies: [
                 "SharedCode",
-                .product(name: "Swifter", package: "swifter")
+                .product(name: "NIO", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOWebSocket", package: "swift-nio")
             ],
             exclude: ["Info.plist"], // Exclude Info.plist from sources
             swiftSettings: [
