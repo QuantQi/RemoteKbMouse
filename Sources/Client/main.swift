@@ -566,58 +566,30 @@ class KVMController: ObservableObject {
         connection?.start(queue: .main)
     }
     
-    /// Send desired display mode to server based on current window size
+    /// Send desired display mode to server - always request 4K@60Hz
     private func sendDesiredDisplayMode() {
         guard connection?.state == .ready else { return }
         
-        // Get the window size (or use default)
-        let windowSize: CGSize
-        if let window = NSApplication.shared.windows.first {
-            windowSize = window.frame.size
-        } else {
-            // Default to main screen size
-            windowSize = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
-        }
-        
-        let scale: Double = Double(NSScreen.main?.backingScaleFactor ?? 2.0)
+        // Fixed 4K@60Hz for maximum quality over high-speed LAN
         let mode = DesiredDisplayMode(
-            width: Int(Double(windowSize.width) * scale),
-            height: Int(Double(windowSize.height) * scale),
-            scale: scale,
+            width: 3840,
+            height: 2160,
+            scale: 2.0,
             refreshRate: 60
         )
         
         pendingDisplayMode = mode
         send(event: .clientDesiredDisplayMode(mode))
-        print("[Client] Sent desired display mode: \(mode.width)x\(mode.height) scale=\(mode.scale)")
+        print("[Client] Sent desired display mode: \(mode.width)x\(mode.height)@\(mode.refreshRate)Hz")
         
         DispatchQueue.main.async {
-            self.displayModeInfo = "Requesting \(mode.width)x\(mode.height)..."
+            self.displayModeInfo = "4K@60Hz"
         }
     }
     
-    /// Called when window resizes - request new display mode
+    /// Called when window resizes - no longer used (menubar app with fixed 4K)
     func handleWindowResize(newSize: CGSize) {
-        guard connection?.state == .ready,
-              serverCapabilities?.supportsVirtualDisplay == true else { return }
-        
-        let scale: Double = Double(NSScreen.main?.backingScaleFactor ?? 2.0)
-        let mode = DesiredDisplayMode(
-            width: Int(Double(newSize.width) * scale),
-            height: Int(Double(newSize.height) * scale),
-            scale: scale,
-            refreshRate: 60
-        )
-        
-        // Only send if significantly different from current mode
-        if let pending = pendingDisplayMode,
-           abs(pending.width - mode.width) < 100 && abs(pending.height - mode.height) < 100 {
-            return
-        }
-        
-        pendingDisplayMode = mode
-        send(event: .clientDesiredDisplayMode(mode))
-        print("[Client] Requested new display mode: \(mode.width)x\(mode.height)")
+        // No-op: we always use fixed 4K@60Hz now
     }
     
     // MARK: - Receive from Server

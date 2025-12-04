@@ -122,10 +122,9 @@ public class H264Encoder {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
         
         // ============================================
-        // 100% QUALITY - VERY HIGH BITRATE
+        // MAXIMUM QUALITY - ULTRA HIGH BITRATE FOR 4Gbps LAN
         // ============================================
-        // For lossless-like quality, use very high bitrates
-        // Local network can easily handle 200+ Mbps
+        // With 4Gbps LAN we can push 400+ Mbps easily
         
         let pixels = Int(width) * Int(height)
         let is5K = pixels >= 5120 * 2880      // 5K+
@@ -137,40 +136,40 @@ public class H264Encoder {
         let maxBitrate: Int
         
         if codec == .hevc {
-            // HEVC at maximum quality
+            // HEVC at ultra-high quality for high-speed LAN
             if is5K {
-                bitrate = 200_000_000     // 200 Mbps for 5K+
-                maxBitrate = 300_000_000  // 300 Mbps peak
+                bitrate = 400_000_000     // 400 Mbps for 5K+
+                maxBitrate = 500_000_000  // 500 Mbps peak
             } else if is4K {
-                bitrate = 150_000_000     // 150 Mbps for 4K
-                maxBitrate = 200_000_000  // 200 Mbps peak
+                bitrate = 300_000_000     // 300 Mbps for 4K
+                maxBitrate = 400_000_000  // 400 Mbps peak
             } else if isQHD {
-                bitrate = 100_000_000     // 100 Mbps for 1440p
-                maxBitrate = 150_000_000
+                bitrate = 200_000_000     // 200 Mbps for 1440p
+                maxBitrate = 300_000_000
             } else if isHD {
-                bitrate = 60_000_000      // 60 Mbps for 1080p
-                maxBitrate = 100_000_000
+                bitrate = 150_000_000     // 150 Mbps for 1080p
+                maxBitrate = 200_000_000
             } else {
-                bitrate = 40_000_000
-                maxBitrate = 60_000_000
+                bitrate = 100_000_000
+                maxBitrate = 150_000_000
             }
         } else {
             // H.264 needs ~50% more bitrate for same quality
             if is5K {
-                bitrate = 300_000_000     // 300 Mbps for 5K+
-                maxBitrate = 400_000_000
+                bitrate = 500_000_000     // 500 Mbps for 5K+
+                maxBitrate = 600_000_000
             } else if is4K {
-                bitrate = 200_000_000     // 200 Mbps for 4K
-                maxBitrate = 300_000_000
+                bitrate = 400_000_000     // 400 Mbps for 4K
+                maxBitrate = 500_000_000
             } else if isQHD {
-                bitrate = 150_000_000     // 150 Mbps for 1440p
-                maxBitrate = 200_000_000
+                bitrate = 300_000_000     // 300 Mbps for 1440p
+                maxBitrate = 400_000_000
             } else if isHD {
-                bitrate = 100_000_000     // 100 Mbps for 1080p
-                maxBitrate = 150_000_000
+                bitrate = 200_000_000     // 200 Mbps for 1080p
+                maxBitrate = 300_000_000
             } else {
-                bitrate = 60_000_000
-                maxBitrate = 100_000_000
+                bitrate = 150_000_000
+                maxBitrate = 200_000_000
             }
         }
         
