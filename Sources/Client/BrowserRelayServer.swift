@@ -71,17 +71,17 @@ public class BrowserRelayServer {
         httpServer["/ws"] = websocket(
             text: { [weak self] session, text in
                 // Handle text messages (we don't expect any)
-                print("[BrowserRelay] Received text: \(text)")
+//                 print("[BrowserRelay] Received text: \(text)")
             },
             binary: { session, data in
                 // Handle binary messages (we don't expect any)
-                print("[BrowserRelay] Received binary: \(data.count) bytes")
+//                 print("[BrowserRelay] Received binary: \(data.count) bytes")
             },
             pong: { session, data in
                 // Pong received
             },
             connected: { [weak self] session in
-                print("[BrowserRelay] WebSocket client connected")
+//                 print("[BrowserRelay] WebSocket client connected")
                 guard let self = self else { return }
                 
                 self.sessionsLock.lock()
@@ -94,12 +94,12 @@ public class BrowserRelayServer {
                 }
             },
             disconnected: { [weak self] session in
-                print("[BrowserRelay] WebSocket client disconnected")
+//                 print("[BrowserRelay] WebSocket client disconnected")
                 guard let self = self else { return }
                 
                 self.sessionsLock.lock()
                 self.webSocketSessions.removeAll { $0 === session }
-                print("[BrowserRelay] Remaining clients: \(self.webSocketSessions.count)")
+//                 print("[BrowserRelay] Remaining clients: \(self.webSocketSessions.count)")
                 self.sessionsLock.unlock()
             }
         )
@@ -112,7 +112,7 @@ public class BrowserRelayServer {
                 port = tryPort
                 server = httpServer
                 isRunning = true
-                print("[BrowserRelay] Started on http://127.0.0.1:\(port)/")
+//                 print("[BrowserRelay] Started on http://127.0.0.1:\(port)/")
                 
                 // Open browser
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -120,15 +120,15 @@ public class BrowserRelayServer {
                 }
                 return
             } catch SocketError.bindFailed(let msg) where msg.contains("Address already in use") {
-                print("[BrowserRelay] Port \(tryPort) in use, trying next...")
+//                 print("[BrowserRelay] Port \(tryPort) in use, trying next...")
                 continue
             } catch {
-                print("[BrowserRelay] Port \(tryPort) failed: \(error)")
+//                 print("[BrowserRelay] Port \(tryPort) failed: \(error)")
                 continue
             }
         }
         
-        print("[BrowserRelay] Failed to find available port")
+//         print("[BrowserRelay] Failed to find available port")
     }
     
     public func stop() {
@@ -142,7 +142,7 @@ public class BrowserRelayServer {
         webSocketSessions.removeAll()
         sessionsLock.unlock()
         
-        print("[BrowserRelay] Stopped")
+//         print("[BrowserRelay] Stopped")
     }
     
     private func openBrowser() {
@@ -166,7 +166,7 @@ public class BrowserRelayServer {
             session.writeText(json)
         }
         
-        print("[BrowserRelay] Broadcast config: \(config.codec == .hevc ? "HEVC" : "H.264") \(config.width)x\(config.height)")
+//         print("[BrowserRelay] Broadcast config: \(config.codec == .hevc ? "HEVC" : "H.264") \(config.width)x\(config.height)")
     }
     
     /// Broadcast a video frame to all connected clients

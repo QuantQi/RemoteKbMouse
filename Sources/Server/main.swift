@@ -29,19 +29,19 @@ class VirtualDisplayManager {
         
         // Log system info
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
-        print("[VirtualDisplay] macOS version: \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)")
-        print("[VirtualDisplay] Requesting: \(mode.width)x\(mode.height)@\(mode.refreshRate ?? 60)Hz")
+//         print("[VirtualDisplay] macOS version: \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)")
+//         print("[VirtualDisplay] Requesting: \(mode.width)x\(mode.height)@\(mode.refreshRate ?? 60)Hz")
         
         // Check if CGVirtualDisplay classes exist
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
               let displayClass = NSClassFromString("CGVirtualDisplay"),
               let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
               let modeClass = NSClassFromString("CGVirtualDisplayMode") as? NSObject.Type else {
-            print("[VirtualDisplay] ❌ CGVirtualDisplay API not available on this macOS version")
+//             print("[VirtualDisplay] ❌ CGVirtualDisplay API not available on this macOS version")
             return false
         }
         
-        print("[VirtualDisplay] ✅ All required classes found")
+//         print("[VirtualDisplay] ✅ All required classes found")
         
         do {
             // Create descriptor using KVC (safer than perform selectors)
@@ -53,7 +53,7 @@ class VirtualDisplayManager {
             descriptor.setValue(UInt32(0x1234), forKey: "productID")
             descriptor.setValue(UInt32(0x5678), forKey: "vendorID")
             descriptor.setValue(UInt32(0x0001), forKey: "serialNum")
-            print("[VirtualDisplay] Descriptor created")
+//             print("[VirtualDisplay] Descriptor created")
             
             // Use objc_msgSend alternative - allocate and init via NSInvocation pattern
             // Actually, let's use a simpler approach with direct class method if available
@@ -61,36 +61,36 @@ class VirtualDisplayManager {
             let initSel = NSSelectorFromString("initWithDescriptor:")
             
             guard displayClass.responds(to: allocSel) else {
-                print("[VirtualDisplay] ❌ CGVirtualDisplay doesn't respond to alloc")
+//                 print("[VirtualDisplay] ❌ CGVirtualDisplay doesn't respond to alloc")
                 return false
             }
             
             // Use safer memory management
             let allocated = (displayClass as AnyObject).perform(allocSel)?.takeRetainedValue()
             guard let allocatedObj = allocated as? NSObject else {
-                print("[VirtualDisplay] ❌ Failed to allocate CGVirtualDisplay")
+//                 print("[VirtualDisplay] ❌ Failed to allocate CGVirtualDisplay")
                 return false
             }
             
             guard allocatedObj.responds(to: initSel) else {
-                print("[VirtualDisplay] ❌ CGVirtualDisplay doesn't respond to initWithDescriptor:")
+//                 print("[VirtualDisplay] ❌ CGVirtualDisplay doesn't respond to initWithDescriptor:")
                 return false
             }
             
             let initialized = allocatedObj.perform(initSel, with: descriptor)?.takeRetainedValue()
             guard let display = initialized as? NSObject else {
-                print("[VirtualDisplay] ❌ Failed to init CGVirtualDisplay")
+//                 print("[VirtualDisplay] ❌ Failed to init CGVirtualDisplay")
                 return false
             }
             
-            print("[VirtualDisplay] ✅ CGVirtualDisplay instance created")
+//             print("[VirtualDisplay] ✅ CGVirtualDisplay instance created")
             
             // Get display ID using KVC
             guard let displayIDValue = display.value(forKey: "displayID") as? UInt32, displayIDValue != 0 else {
-                print("[VirtualDisplay] ❌ Failed to get valid display ID")
+//                 print("[VirtualDisplay] ❌ Failed to get valid display ID")
                 return false
             }
-            print("[VirtualDisplay] ✅ Display ID: \(displayIDValue)")
+//             print("[VirtualDisplay] ✅ Display ID: \(displayIDValue)")
             
             // Create mode
             let refreshRate = mode.refreshRate ?? 60
@@ -108,9 +108,9 @@ class VirtualDisplayManager {
             let applySel = NSSelectorFromString("applySettings:")
             if display.responds(to: applySel) {
                 _ = display.perform(applySel, with: settings)
-                print("[VirtualDisplay] Settings applied")
+//                 print("[VirtualDisplay] Settings applied")
             } else {
-                print("[VirtualDisplay] ⚠️ applySettings: not available")
+//                 print("[VirtualDisplay] ⚠️ applySettings: not available")
             }
             
             virtualDisplayObject = display
@@ -128,14 +128,14 @@ class VirtualDisplayManager {
                     width: CGFloat(mode.width),
                     height: CGFloat(mode.height)
                 )
-                print("[VirtualDisplay] ⚠️ Using estimated frame")
+//                 print("[VirtualDisplay] ⚠️ Using estimated frame")
             }
             
-            print("[VirtualDisplay] ✅ Created: \(mode.width)x\(mode.height)@\(refreshRate)Hz, ID=\(displayID)")
+//             print("[VirtualDisplay] ✅ Created: \(mode.width)x\(mode.height)@\(refreshRate)Hz, ID=\(displayID)")
             return true
             
         } catch {
-            print("[VirtualDisplay] ❌ Exception: \(error)")
+//             print("[VirtualDisplay] ❌ Exception: \(error)")
             return false
         }
     }
@@ -146,14 +146,14 @@ class VirtualDisplayManager {
         let newFrame = CGDisplayBounds(displayID)
         if !newFrame.isEmpty && newFrame.width > 0 && newFrame.height > 0 {
             displayFrame = newFrame
-            print("[VirtualDisplay] Refreshed frame: \(displayFrame)")
+//             print("[VirtualDisplay] Refreshed frame: \(displayFrame)")
         }
     }
     
     func destroyDisplay() {
         guard virtualDisplayObject != nil else { return }
         
-        print("[VirtualDisplay] Destroying display ID=\(displayID)")
+//         print("[VirtualDisplay] Destroying display ID=\(displayID)")
         virtualDisplayObject = nil
         displayID = 0
         displayFrame = .zero
@@ -189,7 +189,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         if let device = metalDevice {
             // print("GPU: \(device.name) (Metal supported)")
         } else {
-            print("Warning: Metal not available, using CPU fallback")
+//             print("Warning: Metal not available, using CPU fallback")
         }
     }
     
@@ -216,10 +216,10 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
                 
                 // Log all available displays for debugging
                 if attempts == 0 {
-                    print("[ScreenCapturer] Available displays:")
+//                     print("[ScreenCapturer] Available displays:")
                     for scDisplay in content.displays {
                         let bounds = CGDisplayBounds(scDisplay.displayID)
-                        print("  - ID=\(scDisplay.displayID): \(scDisplay.width)x\(scDisplay.height) at \(bounds.origin)")
+//                         print("  - ID=\(scDisplay.displayID): \(scDisplay.width)x\(scDisplay.height) at \(bounds.origin)")
                     }
                 }
                 
@@ -230,7 +230,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
                 
                 attempts += 1
                 if attempts < maxAttempts {
-                    print("[ScreenCapturer] Virtual display ID=\(targetID) not found, retry \(attempts)/\(maxAttempts)...")
+//                     print("[ScreenCapturer] Virtual display ID=\(targetID) not found, retry \(attempts)/\(maxAttempts)...")
                     try await Task.sleep(nanoseconds: 300_000_000) // 300ms
                 }
             }
@@ -238,13 +238,13 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             if let found = targetDisplay {
                 display = found
                 foundVirtualDisplay = true
-                print("[ScreenCapturer] Capturing virtual display ID=\(targetID) (\(display.width)x\(display.height))")
+//                 print("[ScreenCapturer] Capturing virtual display ID=\(targetID) (\(display.width)x\(display.height))")
             } else {
-                print("[ScreenCapturer] WARNING: Virtual display ID=\(targetID) not found after \(maxAttempts) attempts")
-                print("[ScreenCapturer] Falling back to main display")
+//                 print("[ScreenCapturer] WARNING: Virtual display ID=\(targetID) not found after \(maxAttempts) attempts")
+//                 print("[ScreenCapturer] Falling back to main display")
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 guard let mainDisplay = content.displays.first else {
-                    print("[ScreenCapturer] ERROR: No displays found")
+//                     print("[ScreenCapturer] ERROR: No displays found")
                     return
                 }
                 display = mainDisplay
@@ -253,11 +253,11 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             // No target specified, use main display
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let mainDisplay = content.displays.first else {
-                print("[ScreenCapturer] ERROR: No displays found")
+//                 print("[ScreenCapturer] ERROR: No displays found")
                 return
             }
             display = mainDisplay
-            print("[ScreenCapturer] Capturing main display")
+//             print("[ScreenCapturer] Capturing main display")
         }
         
         // Use configured dimensions for virtual display, otherwise use display's native resolution
@@ -270,7 +270,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
             captureWidth = display.width
             captureHeight = display.height
         }
-        print("[ScreenCapturer] Capture resolution: \(captureWidth)x\(captureHeight)")
+//         print("[ScreenCapturer] Capture resolution: \(captureWidth)x\(captureHeight)")
         
         // Configure stream for MAXIMUM QUALITY + MINIMUM LATENCY
         let config = SCStreamConfiguration()
@@ -314,7 +314,7 @@ class ScreenCapturer: NSObject, SCStreamDelegate, SCStreamOutput {
         
         try await stream?.startCapture()
         isStreaming = true
-        print("[ScreenCapturer] Screen capture started")
+//         print("[ScreenCapturer] Screen capture started")
     }
     
     func stopCapture() async {
@@ -446,41 +446,41 @@ class Server {
     }
 
     func start() {
-        print("Server starting...")
-        print("Process: \(ProcessInfo.processInfo.processName)")
-        print("PID: \(ProcessInfo.processInfo.processIdentifier)")
+//         print("Server starting...")
+//         print("Process: \(ProcessInfo.processInfo.processName)")
+//         print("PID: \(ProcessInfo.processInfo.processIdentifier)")
         
         // Check for screen recording permission (required for ScreenCaptureKit)
         let hasScreenRecording = CGPreflightScreenCaptureAccess()
-        print("\n--- SCREEN RECORDING PERMISSION CHECK ---")
-        print("CGPreflightScreenCaptureAccess() = \(hasScreenRecording)")
+//         print("\n--- SCREEN RECORDING PERMISSION CHECK ---")
+//         print("CGPreflightScreenCaptureAccess() = \(hasScreenRecording)")
         
         if !hasScreenRecording {
-            print("Requesting screen recording permission...")
+//             print("Requesting screen recording permission...")
             let granted = CGRequestScreenCaptureAccess()
-            print("CGRequestScreenCaptureAccess() = \(granted)")
+//             print("CGRequestScreenCaptureAccess() = \(granted)")
             
             if !granted {
-                print("")
-                print("⚠️  Screen Recording permission is REQUIRED to stream the screen.")
-                print("")
-                print("Since you're running from Terminal, you need to grant permission to TERMINAL:")
-                print("  1. Open System Settings > Privacy & Security > Screen Recording")
-                print("  2. Find 'Terminal' (or your terminal app: iTerm, Warp, etc.)")
-                print("  3. Toggle it ON")
-                print("  4. RESTART Terminal completely (Cmd+Q, then reopen)")
-                print("  5. Run the server again")
-                print("")
-                print("If Terminal is not listed, this request should have added it.")
-                print("Check System Settings now and look for Terminal.")
-                print("---------------------------------------------\n")
+//                 print("")
+//                 print("⚠️  Screen Recording permission is REQUIRED to stream the screen.")
+//                 print("")
+//                 print("Since you're running from Terminal, you need to grant permission to TERMINAL:")
+//                 print("  1. Open System Settings > Privacy & Security > Screen Recording")
+//                 print("  2. Find 'Terminal' (or your terminal app: iTerm, Warp, etc.)")
+//                 print("  3. Toggle it ON")
+//                 print("  4. RESTART Terminal completely (Cmd+Q, then reopen)")
+//                 print("  5. Run the server again")
+//                 print("")
+//                 print("If Terminal is not listed, this request should have added it.")
+//                 print("Check System Settings now and look for Terminal.")
+//                 print("---------------------------------------------\n")
             } else {
-                print("✓ Screen Recording permission granted.")
+//                 print("✓ Screen Recording permission granted.")
             }
         } else {
-            print("✓ Screen Recording permission already granted.")
+//             print("✓ Screen Recording permission already granted.")
         }
-        print("-----------------------------------------\n")
+//         print("-----------------------------------------\n")
         
         // Check for accessibility permissions (required for keyboard events)
         if !hasAccessibilityPermission {
@@ -488,16 +488,16 @@ class Server {
             hasAccessibilityPermission = AXIsProcessTrustedWithOptions(options)
 
             if !hasAccessibilityPermission {
-                print("\n--- ACCESSIBILITY PERMISSION REQUIRED ---")
-                print("⚠️  This application needs Accessibility permissions to simulate keyboard events.")
-                print("Please go to System Settings > Privacy & Security > Accessibility")
-                print("and enable it for 'Server'.")
-                print("-----------------------------------------\n")
+//                 print("\n--- ACCESSIBILITY PERMISSION REQUIRED ---")
+//                 print("⚠️  This application needs Accessibility permissions to simulate keyboard events.")
+//                 print("Please go to System Settings > Privacy & Security > Accessibility")
+//                 print("and enable it for 'Server'.")
+//                 print("-----------------------------------------\n")
             } else {
-                print("✓ Accessibility permission granted.")
+//                 print("✓ Accessibility permission granted.")
             }
         } else {
-            print("✓ Accessibility permission already granted.")
+//             print("✓ Accessibility permission already granted.")
         }
         
         listener.start(queue: .main)
@@ -513,7 +513,7 @@ class Server {
             listener.stateUpdateHandler = self.stateDidChange(to:)
             listener.newConnectionHandler = self.didAccept(nwConnection:)
         } catch {
-            print("Failed to rebuild listener: \(error). Exiting.")
+//             print("Failed to rebuild listener: \(error). Exiting.")
             exit(1)
         }
     }
@@ -521,9 +521,10 @@ class Server {
     private func stateDidChange(to newState: NWListener.State) {
         switch newState {
         case .ready:
-            print("Server ready and advertising on port \(listener.port?.debugDescription ?? "?")")
-        case .failed(let error):
-            print("Server failed with error: \(error). Rebuilding listener...")
+            // print("Server ready and advertising on port \(listener.port?.debugDescription ?? "?")")
+            break
+        case .failed(_):
+            // print("Server failed with error: \(error). Rebuilding listener...")
             listener.cancel()
             // After cancel, listener cannot be reused - must create a new one
             rebuildListener()
@@ -659,7 +660,7 @@ class ServerConnection {
     private func stateDidChange(to state: NWConnection.State) {
         switch state {
         case .failed(let error):
-            print("Connection failed with error: \(error)")
+//             print("Connection failed with error: \(error)")
             self.stop(error: error)
         case .cancelled:
             self.stop(error: nil)
@@ -680,7 +681,7 @@ class ServerConnection {
         let capabilities = ServerCapabilities.current()
         let event = RemoteInputEvent.serverCapabilities(capabilities)
         send(event: event)
-        print("[Server] Sent capabilities: virtualDisplay=\(capabilities.supportsVirtualDisplay), macOS=\(capabilities.macOSVersion)")
+//         print("[Server] Sent capabilities: virtualDisplay=\(capabilities.supportsVirtualDisplay), macOS=\(capabilities.macOSVersion)")
     }
     
     private func startClipboardSync() {
@@ -706,11 +707,11 @@ class ServerConnection {
     
     private func startVideoStream() {
         guard #available(macOS 12.3, *) else {
-            print("Video streaming requires macOS 12.3 or later")
+//             print("Video streaming requires macOS 12.3 or later")
             return
         }
         guard screenCapturer == nil else { return }
-        print("[Server] Starting video stream...")
+//         print("[Server] Starting video stream...")
         
         let capturer = ScreenCapturer()
         capturer.onEncodedFrame = { [weak self] data, isKeyframe in
@@ -727,7 +728,7 @@ class ServerConnection {
                 width: mode.width,
                 height: mode.height
             )
-            print("[Server] Configured capturer for virtual display ID=\(manager.displayID)")
+//             print("[Server] Configured capturer for virtual display ID=\(manager.displayID)")
         }
         
         screenCapturer = capturer
@@ -736,13 +737,13 @@ class ServerConnection {
             do {
                 try await capturer.startCapture()
             } catch {
-                print("Failed to start screen capture: \(error)")
+//                 print("Failed to start screen capture: \(error)")
             }
         }
     }
     
     private func handleDesiredDisplayMode(_ mode: DesiredDisplayMode) {
-        print("[Server] Received desired display mode: \(mode.width)x\(mode.height) scale=\(mode.scale)")
+//         print("[Server] Received desired display mode: \(mode.width)x\(mode.height) scale=\(mode.scale)")
         
         // Stop current video stream if running
         stopVideoStream()
@@ -780,7 +781,7 @@ class ServerConnection {
                 )
                 send(event: .screenInfo(screenInfo))
                 
-                print("[Server] Virtual display created, starting capture...")
+//                 print("[Server] Virtual display created, starting capture...")
                 
                 // Give the display time to register with macOS, then refresh frame and start capture
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
@@ -791,7 +792,7 @@ class ServerConnection {
                         if let mgr = self.virtualDisplayManager as? VirtualDisplayManager {
                             mgr.refreshDisplayFrame()
                             self.virtualDisplayFrame = DisplayFrame(rect: mgr.displayFrame)
-                            print("[Server] Updated virtual display frame: \(mgr.displayFrame)")
+//                             print("[Server] Updated virtual display frame: \(mgr.displayFrame)")
                         }
                     }
                     
@@ -799,10 +800,10 @@ class ServerConnection {
                 }
                 return
             } else {
-                print("[Server] Failed to create virtual display, falling back to mirror mode")
+//                 print("[Server] Failed to create virtual display, falling back to mirror mode")
             }
         } else {
-            print("[Server] Virtual display not supported (requires macOS 14+), using mirror mode")
+//             print("[Server] Virtual display not supported (requires macOS 14+), using mirror mode")
         }
         
         // Fallback: mirror mode
@@ -829,7 +830,7 @@ class ServerConnection {
     private func stopVideoStream() {
         guard #available(macOS 12.3, *) else { return }
         guard let capturer = screenCapturer as? ScreenCapturer else { return }
-        print("[Server] Stopping video stream...")
+//         print("[Server] Stopping video stream...")
         screenCapturer = nil
         
         Task {
@@ -870,7 +871,7 @@ class ServerConnection {
         
         nwConnection.send(content: frameData, completion: .contentProcessed { error in
             if let error = error {
-                print("[SEND] ERROR sending frame: \(error)")
+//                 print("[SEND] ERROR sending frame: \(error)")
             }
         })
     }
@@ -889,7 +890,7 @@ class ServerConnection {
                 isVirtual: true,
                 displayID: manager.displayID
             )
-            print("[Server] Screen info (virtual): \(mode.width)x\(mode.height), displayID=\(manager.displayID)")
+//             print("[Server] Screen info (virtual): \(mode.width)x\(mode.height), displayID=\(manager.displayID)")
         } else {
             // Report main screen info
             let screenSize = getMainScreenSize()
@@ -899,7 +900,7 @@ class ServerConnection {
                 isVirtual: false,
                 displayID: CGMainDisplayID()
             )
-            print("[Server] Screen info (physical): \(screenSize.width)x\(screenSize.height)")
+//             print("[Server] Screen info (physical): \(screenSize.width)x\(screenSize.height)")
         }
         
         send(event: .screenInfo(screenInfo))
@@ -1009,7 +1010,7 @@ class ServerConnection {
                     y: displayFrame.minY + warpEvent.y
                 )
                 CGWarpMouseCursorPosition(point)
-                print("[Server] Warp cursor to: \(point) (virtual frame: \(isVirtualDisplayMode))")
+//                 print("[Server] Warp cursor to: \(point) (virtual frame: \(isVirtualDisplayMode))")
                 // Skip edge checks for 500ms after warp to let mouse events settle
                 warpCursorTime = CACurrentMediaTime()
                 // Show cursor - server now has control
@@ -1087,7 +1088,7 @@ class ServerConnection {
         
         if isAtRightEdge && cooldownPassed {
             lastEdgeReleaseTime = now
-            print("[Server] Right edge hit at x=\(currentPos.x), releasing control")
+//             print("[Server] Right edge hit at x=\(currentPos.x), releasing control")
             sendControlRelease()
         } else {
             edgeMissLogCounter += 1

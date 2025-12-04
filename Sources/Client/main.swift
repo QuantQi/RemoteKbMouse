@@ -179,10 +179,10 @@ class KVMController: ObservableObject {
         didSet {
             // Log state change to console
             if isControllingRemote {
-                print("[Control] ✅ Now controlling remote - press Esc to release")
+//                 print("[Control] ✅ Now controlling remote - press Esc to release")
                 hideCursorAndLock()
             } else {
-                print("[Control] ⏹️  Released remote control")
+//                 print("[Control] ⏹️  Released remote control")
                 showCursorAndUnlock()
             }
         }
@@ -253,7 +253,7 @@ class KVMController: ObservableObject {
             textureCache = cache
             // print("GPU: \(device.name) (Metal zero-copy enabled)")
         } else {
-            print("Warning: Metal not available")
+//             print("Warning: Metal not available")
         }
         
         // print("KVMController initialized.")
@@ -280,7 +280,7 @@ class KVMController: ObservableObject {
         // Start browser relay immediately (so we can test independently)
         browserRelay.start()
         browserRelayURL = browserRelay.url
-        print("[Client] Browser relay URL: \(browserRelayURL)")
+//         print("[Client] Browser relay URL: \(browserRelayURL)")
         
         startBrowsing()
         startEventTap()
@@ -305,7 +305,7 @@ class KVMController: ObservableObject {
     
     /// Handle parameter sets becoming available - build codec description and send to browser
     private func handleParameterSetsAvailable(codec: VideoCodec, vps: Data?, sps: Data, pps: Data) {
-        print("[RELAY] Parameter sets available: codec=\(codec == .hevc ? "HEVC" : "H.264"), vps=\(vps?.count ?? 0), sps=\(sps.count), pps=\(pps.count)")
+//         print("[RELAY] Parameter sets available: codec=\(codec == .hevc ? "HEVC" : "H.264"), vps=\(vps?.count ?? 0), sps=\(sps.count), pps=\(pps.count)")
         
         // Build avcC or hvcc description
         let description: Data?
@@ -313,7 +313,7 @@ class KVMController: ObservableObject {
         
         if codec == .hevc {
             guard let vpsData = vps else { 
-                print("[RELAY] ERROR: HEVC but no VPS")
+//                 print("[RELAY] ERROR: HEVC but no VPS")
                 return 
             }
             description = CodecDescriptionBuilder.buildHvcc(vps: vpsData, sps: sps, pps: pps)
@@ -324,11 +324,11 @@ class KVMController: ObservableObject {
         }
         
         guard let avcDescription = description else {
-            print("[RELAY] Failed to build codec description")
+//             print("[RELAY] Failed to build codec description")
             return
         }
         
-        print("[RELAY] Built codec description: \(avcDescription.count) bytes")
+//         print("[RELAY] Built codec description: \(avcDescription.count) bytes")
         
         let config = BrowserRelayServer.CodecConfig(
             codec: codecType,
@@ -344,7 +344,7 @@ class KVMController: ObservableObject {
            cachedCodecConfig?.height != config.height ||
            cachedCodecConfig?.avcDescription != config.avcDescription {
             cachedCodecConfig = config
-            print("[RELAY] Broadcasting config: \(config.width)x\(config.height) \(codecType == .hevc ? "HEVC" : "H.264")")
+//             print("[RELAY] Broadcasting config: \(config.width)x\(config.height) \(codecType == .hevc ? "HEVC" : "H.264")")
             browserRelay.broadcastConfig(config)
         }
     }
@@ -356,7 +356,7 @@ class KVMController: ObservableObject {
         // This will maintain aspect ratio and fit within the view bounds
         // For true 1:1 rendering, the window should match the virtual display size
         
-        print("[Client] Video layer target size: \(serverScreenSize.width)x\(serverScreenSize.height), virtual=\(isVirtualDisplayMode)")
+//         print("[Client] Video layer target size: \(serverScreenSize.width)x\(serverScreenSize.height), virtual=\(isVirtualDisplayMode)")
         
         // If in virtual display mode, we could resize the window to match
         // For now, just log the expected size - the layer will auto-scale
@@ -388,10 +388,10 @@ class KVMController: ObservableObject {
         hasInputMonitoringPermission = AXIsProcessTrustedWithOptions(options)
         
         if !hasInputMonitoringPermission {
-            print("\n--- PERMISSION REQUIRED ---")
-            print("This application needs Input Monitoring permissions to capture keyboard events.")
-            print("Please go to System Settings > Privacy & Security > Input Monitoring and enable it for 'Client'.")
-            print("---------------------------\n")
+//             print("\n--- PERMISSION REQUIRED ---")
+//             print("This application needs Input Monitoring permissions to capture keyboard events.")
+//             print("Please go to System Settings > Privacy & Security > Input Monitoring and enable it for 'Client'.")
+//             print("---------------------------\n")
         }
     }
     
@@ -428,7 +428,7 @@ class KVMController: ObservableObject {
     func toggleRemoteControl() {
         // Only allow controlling remote if we have a connection
         guard connection?.state == .ready else {
-            print("Cannot control remote: No server connection.")
+//             print("Cannot control remote: No server connection.")
             fflush(stdout)
             return
         }
@@ -476,7 +476,7 @@ class KVMController: ObservableObject {
         // For virtual display, this is relative to 0,0 (server will translate to virtual display frame)
         let serverX = serverScreenSize.width - 20.0
         
-        print("[Client] Sending warpCursor to server: (\(serverX), \(serverY)), virtual=\(isVirtualDisplayMode)")
+//         print("[Client] Sending warpCursor to server: (\(serverX), \(serverY)), virtual=\(isVirtualDisplayMode)")
         
         // Send warp cursor command to server
         let warpEvent = WarpCursorEvent(x: serverX, y: serverY)
@@ -498,7 +498,7 @@ class KVMController: ObservableObject {
             // print("Browser state updated: \(newState)")
             switch newState {
             case .failed(let error):
-                print("Browser failed with error: \(error). Restarting...")
+//                 print("Browser failed with error: \(error). Restarting...")
                 self?.browser?.cancel()
                 self?.browser = nil
                 // Restart browsing after a short delay
@@ -540,15 +540,15 @@ class KVMController: ObservableObject {
             // print("Connection state updated: \(newState)")
             switch newState {
             case .ready:
-                print("Connected to server.")
+//                 print("Connected to server.")
                 self?.startReceiving() // Start receiving messages from server
                 self?.clipboardSync.startPolling()
                 // Browser relay already started in init, just log it
                 let relayURL = self?.browserRelay.url ?? ""
-                print("[Client] Browser relay available at: \(relayURL)")
+//                 print("[Client] Browser relay available at: \(relayURL)")
                 // Note: We'll send desired display mode after receiving server capabilities
             case .failed, .cancelled:
-                print("Connection lost.")
+//                 print("Connection lost.")
                 self?.connection = nil
                 self?.clipboardSync.stopPolling()
                 self?.browserRelay.stop()
@@ -580,7 +580,7 @@ class KVMController: ObservableObject {
         
         pendingDisplayMode = mode
         send(event: .clientDesiredDisplayMode(mode))
-        print("[Client] Sent desired display mode: \(mode.width)x\(mode.height)@\(mode.refreshRate)Hz")
+//         print("[Client] Sent desired display mode: \(mode.width)x\(mode.height)@\(mode.refreshRate)Hz")
         
         DispatchQueue.main.async {
             self.displayModeInfo = "4K@60Hz"
@@ -620,7 +620,7 @@ class KVMController: ObservableObject {
                 // print("[RECV] Connection complete")
             }
             if let error = error {
-                print("[RECV] Connection error: \(error)")
+//                 print("[RECV] Connection error: \(error)")
             }
         }
     }
@@ -719,7 +719,7 @@ class KVMController: ObservableObject {
         
         // Debug: log frame broadcast
         if videoFrameCount <= 5 || videoFrameCount % 60 == 0 || isKeyframe {
-            print("[RELAY] Frame #\(videoFrameCount): \(frameData.count) bytes, keyframe=\(isKeyframe), codec=\(detectedCodec == .hevc ? "HEVC" : "H.264")")
+//             print("[RELAY] Frame #\(videoFrameCount): \(frameData.count) bytes, keyframe=\(isKeyframe), codec=\(detectedCodec == .hevc ? "HEVC" : "H.264")")
         }
         
         browserRelay.broadcastFrame(flags: flags, timestamp: timestamp, payload: frameData)
@@ -769,7 +769,7 @@ class KVMController: ObservableObject {
         switch event {
         case .serverCapabilities(let capabilities):
             serverCapabilities = capabilities
-            print("[Client] Server capabilities: virtualDisplay=\(capabilities.supportsVirtualDisplay), macOS=\(capabilities.macOSVersion)")
+//             print("[Client] Server capabilities: virtualDisplay=\(capabilities.supportsVirtualDisplay), macOS=\(capabilities.macOSVersion)")
             
             // Now that we know server capabilities, send desired display mode
             if capabilities.supportsVirtualDisplay {
@@ -786,7 +786,7 @@ class KVMController: ObservableObject {
             isVirtualDisplayMode = ready.isVirtual
             serverScreenSize = CGSize(width: ready.width, height: ready.height)
             
-            print("[Client] Virtual display ready: \(ready.width)x\(ready.height), virtual=\(ready.isVirtual), displayID=\(ready.displayID)")
+//             print("[Client] Virtual display ready: \(ready.width)x\(ready.height), virtual=\(ready.isVirtual), displayID=\(ready.displayID)")
             
             DispatchQueue.main.async {
                 if ready.isVirtual {
@@ -804,7 +804,7 @@ class KVMController: ObservableObject {
                 currentVirtualDisplayID = displayID
             }
             isVirtualDisplayMode = info.isVirtual
-            print("[Client] Screen info: \(info.width)x\(info.height), virtual=\(info.isVirtual)")
+//             print("[Client] Screen info: \(info.width)x\(info.height), virtual=\(info.isVirtual)")
             
             DispatchQueue.main.async {
                 // Update video layer to match new screen size
@@ -923,7 +923,7 @@ class KVMController: ObservableObject {
         )
 
         guard let eventTap = eventTap else {
-            print("Failed to create event tap. Make sure Input Monitoring permission is granted.")
+//             print("Failed to create event tap. Make sure Input Monitoring permission is granted.")
             fflush(stdout)
             DispatchQueue.main.async { self.isControllingRemote = false }
             return
@@ -1152,7 +1152,7 @@ class KVMController: ObservableObject {
         }
         
         guard let finalDevice = device else {
-            print("No video capture device found. Please connect a camera or capture card.")
+//             print("No video capture device found. Please connect a camera or capture card.")
             return
         }
         
