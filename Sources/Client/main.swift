@@ -21,23 +21,77 @@ struct ClientApp: App {
     @StateObject private var kvmController = KVMController()
     
     init() {
-        // Required for SwiftUI apps built with SPM and run from terminal
-        NSApplication.shared.setActivationPolicy(.regular)
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        // Make it an accessory app - no dock icon, menubar only
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        // Menubar icon with dropdown menu
+        MenuBarExtra {
+            MenuBarView()
                 .environmentObject(kvmController)
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        if let window = NSApplication.shared.windows.first {
-                            window.toggleFullScreen(nil)
-                        }
-                    }
-                }
+        } label: {
+            // Menubar icon changes based on connection state
+            Image(systemName: kvmController.isControllingRemote ? "keyboard.fill" : "keyboard")
         }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+// MARK: - MenuBar View
+
+struct MenuBarView: View {
+    @EnvironmentObject var kvmController: KVMController
+    
+    var body: some View {
+        // Connection status
+        if kvmController.browserRelayURL.isEmpty {
+            Text("⚪ Waiting for connection...")
+        } else {
+            Text(kvmController.isControllingRemote ? "🟢 Controlling Remote" : "⚪ Connected")
+        }
+        
+        Divider()
+        
+        // Display mode info
+        if !kvmController.displayModeInfo.isEmpty {
+            Text(kvmController.displayModeInfo)
+                .font(.caption)
+        }
+        
+        if kvmController.isVirtualDisplayMode {
+            Text("📺 Virtual Display Mode")
+        }
+        
+        Divider()
+        
+        // Browser URL
+        if !kvmController.browserRelayURL.isEmpty {
+            Button("Open Video in Browser") {
+                if let url = URL(string: kvmController.browserRelayURL) {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            
+            Text(kvmController.browserRelayURL)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        
+        Divider()
+        
+        // Control toggle
+        Button(kvmController.isControllingRemote ? "Release Control (Esc)" : "Take Control") {
+            kvmController.toggleRemoteControl()
+        }
+        .keyboardShortcut(.escape, modifiers: [])
+        
+        Divider()
+        
+        Button("Quit") {
+            NSApplication.shared.terminate(nil)
+        }
+        .keyboardShortcut("q")
     }
 }
 
@@ -123,9 +177,12 @@ class ClipboardSyncManager {
 class KVMController: ObservableObject {
     @Published var isControllingRemote: Bool = false {
         didSet {
+            // Log state change to console
             if isControllingRemote {
+                print("[Control] ✅ Now controlling remote - press Esc to release")
                 hideCursorAndLock()
             } else {
+                print("[Control] ⏹️  Released remote control")
                 showCursorAndUnlock()
             }
         }
@@ -1293,141 +1350,5 @@ class VideoContainerView: NSView {
     override func layout() {
         super.layout()
         layer?.frame = bounds
-    }
-}
-
-
-struct ContentView: View {
-    @EnvironmentObject var kvmController: KVMController
-    @State private var showControls = true
-    
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Black background with browser URL info (video is now in browser)
-                Color.black
-                    .ignoresSafeArea(.all)
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showControls.toggle()
-                        }
-                    }
-                
-                // Browser relay info centered on screen
-                if !kvmController.browserRelayURL.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "tv")
-                            .font(.system(size: 64))
-                            .foregroundColor(.gray)
-                        
-                        Text("Video streaming to browser")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                        
-                        Text(kvmController.browserRelayURL)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.blue)
-                            .underline()
-                            .onTapGesture {
-                                if let url = URL(string: kvmController.browserRelayURL) {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                        
-                        Text("Click the URL above to open in browser")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                    .padding(32)
-                    .background(Color.black.opacity(0.8))
-                    .cornerRadius(16)
-                } else {
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.5)
-                        
-                        Text("Waiting for connection...")
-                            .font(.title3)
-                            .foregroundColor(.gray)
-                    }
-                }
-                
-                // Video error overlay
-                if let error = kvmController.videoError {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.yellow)
-                            Text(error)
-                                .font(.caption)
-                        }
-                        .padding(8)
-                        .background(Color.red.opacity(0.8))
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                        .padding(.bottom, 60)
-                    }
-                }
-
-                // Overlay controls (can be hidden)
-                if showControls {
-                    VStack {
-                        // Status bar at top
-                        HStack {
-                            Text(kvmController.isControllingRemote ? "🟢 Controlling Remote" : "⚪ Local Mode")
-                                .font(.caption)
-                                .padding(8)
-                                .background(Color.black.opacity(0.6))
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
-                            
-                            // Display mode indicator
-                            Text(kvmController.isVirtualDisplayMode ? "📺 Virtual" : "🪞 Mirror")
-                                .font(.caption)
-                                .padding(8)
-                                .background(Color.black.opacity(0.6))
-                                .foregroundColor(kvmController.isVirtualDisplayMode ? .green : .orange)
-                                .cornerRadius(8)
-                            
-                            Spacer()
-                            
-                            Text(kvmController.displayModeInfo)
-                                .font(.caption)
-                                .padding(8)
-                                .background(Color.black.opacity(0.6))
-                                .foregroundColor(.gray)
-                                .cornerRadius(8)
-                        }
-                        .padding()
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            kvmController.toggleRemoteControl()
-                        }) {
-                            Text(kvmController.isControllingRemote ? "Release Control" : "Control MacBook")
-                                .font(.headline)
-                                .padding()
-                                .frame(minWidth: 250)
-                                .background(kvmController.isControllingRemote ? Color.red : Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.bottom, 40)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { _ in
-                // Request new display mode when window resizes
-                if let window = NSApplication.shared.windows.first {
-                    kvmController.handleWindowResize(newSize: window.frame.size)
-                }
-            }
-        }
     }
 }

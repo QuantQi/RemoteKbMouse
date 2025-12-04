@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "RemoteKVM",
     platforms: [
-        .macOS(.v12)
+        .macOS(.v13)
     ],
     products: [
         .executable(name: "Server", targets: ["Server"]),
