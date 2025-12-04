@@ -220,6 +220,11 @@ class KVMController: ObservableObject {
             self?.isControllingRemote == true
         }
         
+        // Start browser relay immediately (so we can test independently)
+        browserRelay.start()
+        browserRelayURL = browserRelay.url
+        print("[Client] Browser relay URL: \(browserRelayURL)")
+        
         startBrowsing()
         startEventTap()
     }
@@ -481,13 +486,9 @@ class KVMController: ObservableObject {
                 print("Connected to server.")
                 self?.startReceiving() // Start receiving messages from server
                 self?.clipboardSync.startPolling()
-                // Start browser relay
-                self?.browserRelay.start()
+                // Browser relay already started in init, just log it
                 let relayURL = self?.browserRelay.url ?? ""
-                print("[Client] Browser relay URL: \(relayURL)")
-                DispatchQueue.main.async {
-                    self?.browserRelayURL = relayURL
-                }
+                print("[Client] Browser relay available at: \(relayURL)")
                 // Note: We'll send desired display mode after receiving server capabilities
             case .failed, .cancelled:
                 print("Connection lost.")
