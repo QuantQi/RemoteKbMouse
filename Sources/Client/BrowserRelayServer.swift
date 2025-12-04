@@ -133,7 +133,10 @@ public class BrowserRelayServer {
                 port = tryPort
                 isRunning = true
                 print("[BrowserRelay] Started on http://127.0.0.1:\(port)/")
-                openBrowser()
+                // Delay browser open slightly to ensure listener is ready
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.openBrowser()
+                }
                 return
             }
         }
@@ -143,20 +146,30 @@ public class BrowserRelayServer {
     
     private func tryStartListener(on port: UInt16) -> Bool {
         let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
+        parameters.allowLocalEndpointReuse = false  // Don't reuse - we want to know if it's taken
         
         guard let portNum = NWEndpoint.Port(rawValue: port) else { return false }
+        
+        // Use a semaphore to wait for the listener state
+        let semaphore = DispatchSemaphore(value: 0)
+        var listenerReady = false
+        var listenerFailed = false
         
         do {
             let newListener = try NWListener(using: parameters, on: portNum)
             
-            newListener.stateUpdateHandler = { [weak self] state in
+            newListener.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    break
+                    listenerReady = true
+                    semaphore.signal()
                 case .failed(let error):
-                    print("[BrowserRelay] Listener failed: \(error)")
-                    self?.stop()
+                    print("[BrowserRelay] Port \(port) failed: \(error)")
+                    listenerFailed = true
+                    semaphore.signal()
+                case .cancelled:
+                    listenerFailed = true
+                    semaphore.signal()
                 default:
                     break
                 }
@@ -166,10 +179,28 @@ public class BrowserRelayServer {
                 self?.handleNewConnection(connection)
             }
             
-            newListener.start(queue: .main)
+            // Start on a background queue so we can wait
+            let listenerQueue = DispatchQueue(label: "browserRelay.listener")
+            newListener.start(queue: listenerQueue)
+            
+            // Wait up to 1 second for the listener to be ready or fail
+            let result = semaphore.wait(timeout: .now() + 1.0)
+            
+            if result == .timedOut {
+                print("[BrowserRelay] Port \(port) timed out")
+                newListener.cancel()
+                return false
+            }
+            
+            if listenerFailed || !listenerReady {
+                newListener.cancel()
+                return false
+            }
+            
             listener = newListener
             return true
         } catch {
+            print("[BrowserRelay] Port \(port) exception: \(error)")
             return false
         }
     }
