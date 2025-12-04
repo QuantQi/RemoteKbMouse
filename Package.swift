@@ -24,6 +24,9 @@ let package = Package(
             name: "Client",
             dependencies: ["SharedCode"],
             exclude: ["Info.plist"], // Exclude Info.plist from sources
+            swiftSettings: [
+                .unsafeFlags(["-parse-as-library"])
+            ],
             linkerSettings: [
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",

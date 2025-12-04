@@ -361,6 +361,17 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
     public var onDecodedFrame: ((CVPixelBuffer, CMTime) -> Void)?
     public var onError: ((String) -> Void)?
     
+    /// Callback when parameter sets are available/updated (codec, vps (hevc only), sps, pps)
+    public var onParameterSetsAvailable: ((VideoCodec, Data?, Data, Data) -> Void)?
+    
+    /// Get current detected codec
+    public var currentCodec: VideoCodec? { detectedCodec }
+    
+    /// Get current parameter sets (vps, sps, pps) - vps is nil for H.264
+    public var currentParameterSets: (vps: Data?, sps: Data?, pps: Data?) {
+        (vpsData, spsData, ppsData)
+    }
+    
     public init() {}
     
     deinit {
@@ -687,6 +698,11 @@ public class H264Decoder {  // Keep name for compatibility - handles both H.264 
         VTSessionSetProperty(session, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         
         decompressionSession = session
+        
+        // Notify about parameter sets availability
+        if let codec = detectedCodec, let sps = spsData, let pps = ppsData {
+            onParameterSetsAvailable?(codec, vpsData, sps, pps)
+        }
         // print("\(codecName) Decoder initialized")
     }
     

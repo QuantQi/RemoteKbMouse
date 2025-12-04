@@ -136,9 +136,14 @@ class KVMController: ObservableObject {
     @Published var videoError: String?  // Error message for video issues
     @Published var isVirtualDisplayMode: Bool = false  // True if server is in virtual display mode
     @Published var displayModeInfo: String = "Connecting..."  // Status info for UI
+    @Published var browserRelayURL: String = ""  // URL where video is streaming
     
-    // Video display layer (for network stream mode)
+    // Video display layer (for network stream mode) - kept but not used in UI
     let videoLayer = CALayer()
+    
+    // Browser relay server
+    private let browserRelay = BrowserRelayServer()
+    private var cachedCodecConfig: BrowserRelayServer.CodecConfig?
     
     // GPU acceleration
     private let metalDevice: MTLDevice?
@@ -229,7 +234,49 @@ class KVMController: ObservableObject {
                 self?.videoError = error
             }
         }
+        // Hook up parameter set callback for browser relay
+        decoder?.onParameterSetsAvailable = { [weak self] codec, vps, sps, pps in
+            self?.handleParameterSetsAvailable(codec: codec, vps: vps, sps: sps, pps: pps)
+        }
         // print("Video decoder initialized")
+    }
+    
+    /// Handle parameter sets becoming available - build codec description and send to browser
+    private func handleParameterSetsAvailable(codec: VideoCodec, vps: Data?, sps: Data, pps: Data) {
+        // Build avcC or hvcc description
+        let description: Data?
+        let codecType: BrowserRelayServer.VideoCodecType
+        
+        if codec == .hevc {
+            guard let vpsData = vps else { return }
+            description = CodecDescriptionBuilder.buildHvcc(vps: vpsData, sps: sps, pps: pps)
+            codecType = .hevc
+        } else {
+            description = CodecDescriptionBuilder.buildAvcC(sps: sps, pps: pps)
+            codecType = .h264
+        }
+        
+        guard let avcDescription = description else {
+            print("[Client] Failed to build codec description")
+            return
+        }
+        
+        let config = BrowserRelayServer.CodecConfig(
+            codec: codecType,
+            avcDescription: avcDescription,
+            width: Int(serverScreenSize.width),
+            height: Int(serverScreenSize.height)
+        )
+        
+        // Only broadcast if config changed
+        if cachedCodecConfig == nil || 
+           cachedCodecConfig?.codec != config.codec ||
+           cachedCodecConfig?.width != config.width ||
+           cachedCodecConfig?.height != config.height ||
+           cachedCodecConfig?.avcDescription != config.avcDescription {
+            cachedCodecConfig = config
+            browserRelay.broadcastConfig(config)
+        }
     }
     
     /// Update video layer sizing based on server screen size
@@ -313,6 +360,9 @@ class KVMController: ObservableObject {
         
         // Stop clipboard sync
         clipboardSync.stopPolling()
+        
+        // Stop browser relay
+        browserRelay.stop()
         
         // Stop browsing
         browser?.cancel()
@@ -448,16 +498,23 @@ class KVMController: ObservableObject {
                 print("Connected to server.")
                 self?.startReceiving() // Start receiving messages from server
                 self?.clipboardSync.startPolling()
+                // Start browser relay
+                self?.browserRelay.start()
+                DispatchQueue.main.async {
+                    self?.browserRelayURL = self?.browserRelay.url ?? ""
+                }
                 // Note: We'll send desired display mode after receiving server capabilities
             case .failed, .cancelled:
                 print("Connection lost.")
                 self?.connection = nil
                 self?.clipboardSync.stopPolling()
+                self?.browserRelay.stop()
                 self?.serverCapabilities = nil
                 self?.isVirtualDisplayMode = false
                 DispatchQueue.main.async { 
                     self?.isControllingRemote = false
                     self?.displayModeInfo = "Disconnected"
+                    self?.browserRelayURL = ""
                 }
             default:
                 break
@@ -620,6 +677,7 @@ class KVMController: ObservableObject {
         
         videoFrameCount += 1
         let isKeyframe = frameHeader?.isKeyframe ?? false
+        let timestamp = frameHeader?.timestamp ?? 0
         
         // Always log first 10 frames, then every 60th, plus all keyframes
         // if videoFrameCount <= 10 || videoFrameCount % 60 == 0 || isKeyframe {
@@ -636,7 +694,16 @@ class KVMController: ObservableObject {
             DispatchQueue.main.async { self.videoError = nil }
         }
         
-        // Decode the frame
+        // Forward frame to browser relay BEFORE decoding
+        // Build flags: bit0 = keyframe, bit1 = HEVC
+        let detectedCodec = decoder?.currentCodec
+        var flags: UInt8 = isKeyframe ? 0x01 : 0x00
+        if detectedCodec == .hevc {
+            flags |= 0x02
+        }
+        browserRelay.broadcastFrame(flags: flags, timestamp: timestamp, payload: frameData)
+        
+        // Decode the frame (still needed to detect codec and extract parameter sets)
         if videoSourceMode == .networkStream {
             // print("[FRAME] Sending \(frameData.count) bytes to decoder...")
             decoder?.decode(nalData: frameData)
@@ -1248,18 +1315,52 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Video feed based on source mode
-                Group {
-                    if kvmController.videoSourceMode == .captureCard {
-                        VideoView(session: kvmController.captureSession)
-                    } else {
-                        NetworkVideoView(videoLayer: kvmController.videoLayer)
+                // Black background with browser URL info (video is now in browser)
+                Color.black
+                    .ignoresSafeArea(.all)
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showControls.toggle()
+                        }
                     }
-                }
-                .ignoresSafeArea(.all)
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showControls.toggle()
+                
+                // Browser relay info centered on screen
+                if !kvmController.browserRelayURL.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "tv")
+                            .font(.system(size: 64))
+                            .foregroundColor(.gray)
+                        
+                        Text("Video streaming to browser")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                        
+                        Text(kvmController.browserRelayURL)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.blue)
+                            .underline()
+                            .onTapGesture {
+                                if let url = URL(string: kvmController.browserRelayURL) {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                        
+                        Text("Click the URL above to open in browser")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(32)
+                    .background(Color.black.opacity(0.8))
+                    .cornerRadius(16)
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                        
+                        Text("Waiting for connection...")
+                            .font(.title3)
+                            .foregroundColor(.gray)
                     }
                 }
                 
