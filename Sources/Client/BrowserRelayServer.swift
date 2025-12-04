@@ -150,55 +150,46 @@ public class BrowserRelayServer {
         
         guard let portNum = NWEndpoint.Port(rawValue: port) else { return false }
         
-        // Use a semaphore to wait for the listener state
-        let semaphore = DispatchSemaphore(value: 0)
-        var listenerReady = false
-        var listenerFailed = false
-        
         do {
             let newListener = try NWListener(using: parameters, on: portNum)
             
+            // Use a simple flag and polling approach since we're on main thread
+            var listenerState: NWListener.State = .setup
+            
             newListener.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    listenerReady = true
-                    semaphore.signal()
-                case .failed(let error):
+                listenerState = state
+                if case .failed(let error) = state {
                     print("[BrowserRelay] Port \(port) failed: \(error)")
-                    listenerFailed = true
-                    semaphore.signal()
-                case .cancelled:
-                    listenerFailed = true
-                    semaphore.signal()
-                default:
-                    break
                 }
             }
             
             newListener.newConnectionHandler = { [weak self] connection in
-                self?.handleNewConnection(connection)
+                DispatchQueue.main.async {
+                    self?.handleNewConnection(connection)
+                }
             }
             
-            // Start on a background queue so we can wait
-            let listenerQueue = DispatchQueue(label: "browserRelay.listener")
-            newListener.start(queue: listenerQueue)
+            // Start on main queue
+            newListener.start(queue: .main)
             
-            // Wait up to 1 second for the listener to be ready or fail
-            let result = semaphore.wait(timeout: .now() + 1.0)
+            // Poll for state change (run loop will process events)
+            let deadline = Date().addingTimeInterval(0.5)
+            while listenerState == .setup && Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
             
-            if result == .timedOut {
-                print("[BrowserRelay] Port \(port) timed out")
+            switch listenerState {
+            case .ready:
+                listener = newListener
+                return true
+            case .failed, .cancelled:
                 newListener.cancel()
                 return false
+            default:
+                // Still in setup or waiting - treat as success and hope for the best
+                listener = newListener
+                return true
             }
-            
-            if listenerFailed || !listenerReady {
-                newListener.cancel()
-                return false
-            }
-            
-            listener = newListener
-            return true
         } catch {
             print("[BrowserRelay] Port \(port) exception: \(error)")
             return false
