@@ -1,7 +1,6 @@
 import Foundation
-import Network
+import Swifter
 import AppKit
-import CryptoKit
 
 // MARK: - Browser Relay Server
 
@@ -23,7 +22,7 @@ public class BrowserRelayServer {
             self.height = height
         }
         
-        func toJSON() -> Data? {
+        func toJSON() -> String? {
             let dict: [String: Any] = [
                 "type": "config",
                 "codec": codec == .hevc ? "hevc" : "h264",
@@ -31,7 +30,8 @@ public class BrowserRelayServer {
                 "width": width,
                 "height": height
             ]
-            return try? JSONSerialization.data(withJSONObject: dict)
+            guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+            return String(data: data, encoding: .utf8)
         }
     }
     
@@ -40,78 +40,11 @@ public class BrowserRelayServer {
         case hevc
     }
     
-    // MARK: - WebSocket Client
-    
-    private class WebSocketClient {
-        let connection: NWConnection
-        var isWebSocketUpgraded = false
-        var pendingHTTPData = Data()
-        var sendQueue = DispatchQueue(label: "websocket.send")
-        var pendingFrames = 0
-        let maxPendingFrames = 30  // Drop frames if client is too slow
-        
-        init(connection: NWConnection) {
-            self.connection = connection
-        }
-        
-        func sendWebSocketFrame(_ data: Data, isText: Bool = false) {
-            guard isWebSocketUpgraded else { return }
-            
-            // Check backpressure
-            if pendingFrames > maxPendingFrames {
-                // Drop frame for slow client
-                return
-            }
-            
-            sendQueue.async { [weak self] in
-                guard let self = self else { return }
-                
-                let frame = self.encodeWebSocketFrame(data, isText: isText)
-                self.pendingFrames += 1
-                
-                self.connection.send(content: frame, completion: .contentProcessed { [weak self] error in
-                    self?.pendingFrames -= 1
-                    if let error = error {
-                        print("[WS] Send error: \(error)")
-                    }
-                })
-            }
-        }
-        
-        private func encodeWebSocketFrame(_ payload: Data, isText: Bool) -> Data {
-            var frame = Data()
-            
-            // FIN + opcode (0x81 for text, 0x82 for binary)
-            frame.append(isText ? 0x81 : 0x82)
-            
-            // Payload length (server frames are not masked)
-            if payload.count <= 125 {
-                frame.append(UInt8(payload.count))
-            } else if payload.count <= 65535 {
-                frame.append(126)
-                frame.append(UInt8((payload.count >> 8) & 0xFF))
-                frame.append(UInt8(payload.count & 0xFF))
-            } else {
-                frame.append(127)
-                for i in (0..<8).reversed() {
-                    frame.append(UInt8((payload.count >> (i * 8)) & 0xFF))
-                }
-            }
-            
-            frame.append(payload)
-            return frame
-        }
-        
-        func close() {
-            connection.cancel()
-        }
-    }
-    
     // MARK: - Properties
     
-    private var listener: NWListener?
-    private var clients: [ObjectIdentifier: WebSocketClient] = [:]
-    private let clientsLock = NSLock()
+    private var server: HttpServer?
+    private var webSocketSessions: [WebSocketSession] = []
+    private let sessionsLock = NSLock()
     private var port: UInt16 = 8080
     private var isRunning = false
     private var cachedConfig: CodecConfig?
@@ -126,99 +59,88 @@ public class BrowserRelayServer {
     public func start(preferredPort: UInt16 = 8080) {
         guard !isRunning else { return }
         
+        let httpServer = HttpServer()
+        
+        // Serve HTML page at root
+        httpServer["/"] = { [weak self] _ in
+            guard let self = self else { return .notFound }
+            return .ok(.html(self.generateHTMLPage()))
+        }
+        
+        // WebSocket endpoint
+        httpServer["/ws"] = websocket(
+            text: { [weak self] session, text in
+                // Handle text messages (we don't expect any)
+                print("[BrowserRelay] Received text: \(text)")
+            },
+            binary: { session, data in
+                // Handle binary messages (we don't expect any)
+                print("[BrowserRelay] Received binary: \(data.count) bytes")
+            },
+            pong: { session, data in
+                // Pong received
+            },
+            connected: { [weak self] session in
+                print("[BrowserRelay] WebSocket client connected")
+                guard let self = self else { return }
+                
+                self.sessionsLock.lock()
+                self.webSocketSessions.append(session)
+                self.sessionsLock.unlock()
+                
+                // Send cached config if available
+                if let config = self.cachedConfig, let json = config.toJSON() {
+                    session.writeText(json)
+                }
+            },
+            disconnected: { [weak self] session in
+                print("[BrowserRelay] WebSocket client disconnected")
+                guard let self = self else { return }
+                
+                self.sessionsLock.lock()
+                self.webSocketSessions.removeAll { $0 === session }
+                print("[BrowserRelay] Remaining clients: \(self.webSocketSessions.count)")
+                self.sessionsLock.unlock()
+            }
+        )
+        
         // Try ports starting from preferredPort
         for offset in 0..<100 {
             let tryPort = preferredPort + UInt16(offset)
-            if tryStartListener(on: tryPort) {
+            do {
+                try httpServer.start(tryPort, forceIPv4: true)
                 port = tryPort
+                server = httpServer
                 isRunning = true
                 print("[BrowserRelay] Started on http://127.0.0.1:\(port)/")
-                // Delay browser open slightly to ensure listener is ready
+                
+                // Open browser
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     self?.openBrowser()
                 }
                 return
+            } catch SocketError.bindFailed(let msg) where msg.contains("Address already in use") {
+                print("[BrowserRelay] Port \(tryPort) in use, trying next...")
+                continue
+            } catch {
+                print("[BrowserRelay] Port \(tryPort) failed: \(error)")
+                continue
             }
         }
         
         print("[BrowserRelay] Failed to find available port")
     }
     
-    private func tryStartListener(on port: UInt16) -> Bool {
-        let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = false  // Don't reuse - we want to know if it's taken
-        
-        guard let portNum = NWEndpoint.Port(rawValue: port) else { return false }
-        
-        do {
-            let newListener = try NWListener(using: parameters, on: portNum)
-            
-            // Use a simple flag and polling approach since we're on main thread
-            var listenerState: NWListener.State = .setup
-            
-            newListener.stateUpdateHandler = { [weak self] state in
-                listenerState = state
-                switch state {
-                case .ready:
-                    print("[BrowserRelay] Listener ready on port \(port)")
-                case .failed(let error):
-                    print("[BrowserRelay] Listener failed on port \(port): \(error)")
-                    self?.stop()
-                case .cancelled:
-                    print("[BrowserRelay] Listener cancelled")
-                case .waiting(let error):
-                    print("[BrowserRelay] Listener waiting: \(error)")
-                default:
-                    break
-                }
-            }
-            
-            newListener.newConnectionHandler = { [weak self] connection in
-                DispatchQueue.main.async {
-                    self?.handleNewConnection(connection)
-                }
-            }
-            
-            // Start on main queue
-            newListener.start(queue: .main)
-            
-            // Poll for state change (run loop will process events)
-            let deadline = Date().addingTimeInterval(0.5)
-            while listenerState == .setup && Date() < deadline {
-                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
-            }
-            
-            switch listenerState {
-            case .ready:
-                listener = newListener
-                return true
-            case .failed, .cancelled:
-                newListener.cancel()
-                return false
-            default:
-                // Still in setup or waiting - treat as success and hope for the best
-                listener = newListener
-                return true
-            }
-        } catch {
-            print("[BrowserRelay] Port \(port) exception: \(error)")
-            return false
-        }
-    }
-    
     public func stop() {
         guard isRunning else { return }
         isRunning = false
         
-        listener?.cancel()
-        listener = nil
+        server?.stop()
+        server = nil
         
-        clientsLock.lock()
-        for client in clients.values {
-            client.close()
-        }
-        clients.removeAll()
-        clientsLock.unlock()
+        sessionsLock.lock()
+        webSocketSessions.removeAll()
+        sessionsLock.unlock()
         
         print("[BrowserRelay] Stopped")
     }
@@ -226,194 +148,6 @@ public class BrowserRelayServer {
     private func openBrowser() {
         guard let url = URL(string: "http://127.0.0.1:\(port)/") else { return }
         NSWorkspace.shared.open(url)
-    }
-    
-    // MARK: - Connection Handling
-    
-    private func handleNewConnection(_ connection: NWConnection) {
-        print("[BrowserRelay] New connection from: \(connection.endpoint)")
-        let client = WebSocketClient(connection: connection)
-        let clientId = ObjectIdentifier(connection)
-        
-        connection.stateUpdateHandler = { [weak self, weak client] state in
-            switch state {
-            case .ready:
-                print("[BrowserRelay] Connection ready")
-                self?.startReceiving(client: client, clientId: clientId)
-            case .failed(let error):
-                print("[BrowserRelay] Connection failed: \(error)")
-                self?.removeClient(clientId)
-            case .cancelled:
-                print("[BrowserRelay] Connection cancelled")
-                self?.removeClient(clientId)
-            case .waiting(let error):
-                print("[BrowserRelay] Connection waiting: \(error)")
-            default:
-                break
-            }
-        }
-        
-        connection.start(queue: .main)
-    }
-    
-    private func startReceiving(client: WebSocketClient?, clientId: ObjectIdentifier) {
-        guard let client = client else { return }
-        
-        client.connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self, weak client] data, _, isComplete, error in
-            guard let self = self, let client = client else { return }
-            
-            if let error = error {
-                print("[BrowserRelay] Receive error: \(error)")
-            }
-            
-            if let data = data {
-                if client.isWebSocketUpgraded {
-                    // Handle WebSocket frames (we don't really need to parse them, just keep connection alive)
-                    self.handleWebSocketData(data, client: client)
-                } else {
-                    // HTTP request
-                    client.pendingHTTPData.append(data)
-                    self.handleHTTPRequest(client: client, clientId: clientId)
-                }
-            }
-            
-            if !isComplete && error == nil {
-                self.startReceiving(client: client, clientId: clientId)
-            } else if isComplete || error != nil {
-                if isComplete {
-                    print("[BrowserRelay] Connection completed")
-                }
-                self.removeClient(clientId)
-            }
-        }
-    }
-    
-    private func handleHTTPRequest(client: WebSocketClient, clientId: ObjectIdentifier) {
-        guard let requestString = String(data: client.pendingHTTPData, encoding: .utf8),
-              requestString.contains("\r\n\r\n") else {
-            return  // Wait for complete headers
-        }
-        
-        let lines = requestString.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return }
-        
-        let parts = requestLine.components(separatedBy: " ")
-        guard parts.count >= 2 else { return }
-        
-        let method = parts[0]
-        let path = parts[1]
-        
-        print("[BrowserRelay] HTTP request: \(method) \(path)")
-        
-        // Check for WebSocket upgrade
-        let isUpgrade = requestString.lowercased().contains("upgrade: websocket")
-        let wsKeyLine = lines.first { $0.lowercased().hasPrefix("sec-websocket-key:") }
-        
-        if method == "GET" && path == "/ws" && isUpgrade, let keyLine = wsKeyLine {
-            print("[BrowserRelay] WebSocket upgrade request")
-            let key = keyLine.components(separatedBy: ":").dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
-            handleWebSocketUpgrade(client: client, clientId: clientId, key: key)
-        } else if method == "GET" && (path == "/" || path.isEmpty) {
-            print("[BrowserRelay] Serving HTML page")
-            sendHTMLPage(client: client, clientId: clientId)
-        } else {
-            print("[BrowserRelay] 404 for path: \(path)")
-            send404(client: client)
-        }
-        
-        client.pendingHTTPData.removeAll()
-    }
-    
-    private func handleWebSocketUpgrade(client: WebSocketClient, clientId: ObjectIdentifier, key: String) {
-        // Compute accept key
-        let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        let combined = key + magic
-        let hash = Insecure.SHA1.hash(data: Data(combined.utf8))
-        let acceptKey = Data(hash).base64EncodedString()
-        
-        let response = """
-        HTTP/1.1 101 Switching Protocols\r
-        Upgrade: websocket\r
-        Connection: Upgrade\r
-        Sec-WebSocket-Accept: \(acceptKey)\r
-        \r
-        
-        """
-        
-        client.connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self, weak client] error in
-            guard let self = self, let client = client, error == nil else { return }
-            
-            client.isWebSocketUpgraded = true
-            
-            self.clientsLock.lock()
-            self.clients[clientId] = client
-            self.clientsLock.unlock()
-            
-            print("[BrowserRelay] WebSocket client connected")
-            
-            // Send cached config if available
-            if let config = self.cachedConfig, let json = config.toJSON() {
-                client.sendWebSocketFrame(json, isText: true)
-            }
-        })
-    }
-    
-    private func handleWebSocketData(_ data: Data, client: WebSocketClient) {
-        // Parse WebSocket frame (simplified - just handle ping/close)
-        guard data.count >= 2 else { return }
-        
-        let opcode = data[0] & 0x0F
-        
-        switch opcode {
-        case 0x08:  // Close
-            client.close()
-        case 0x09:  // Ping - send pong
-            var pong = Data([0x8A])  // Pong with no payload
-            pong.append(0x00)
-            client.connection.send(content: pong, completion: .idempotent)
-        default:
-            break  // Ignore other frames
-        }
-    }
-    
-    private func sendHTMLPage(client: WebSocketClient, clientId: ObjectIdentifier) {
-        let html = generateHTMLPage()
-        let response = """
-        HTTP/1.1 200 OK\r
-        Content-Type: text/html; charset=utf-8\r
-        Content-Length: \(html.utf8.count)\r
-        Connection: close\r
-        \r
-        \(html)
-        """
-        
-        client.connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] _ in
-            // Close connection after sending HTML (HTTP/1.0 style)
-            self?.removeClient(clientId)
-        })
-    }
-    
-    private func send404(client: WebSocketClient) {
-        let response = """
-        HTTP/1.1 404 Not Found\r
-        Content-Length: 0\r
-        Connection: close\r
-        \r
-        
-        """
-        
-        client.connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
-            client.close()
-        })
-    }
-    
-    private func removeClient(_ clientId: ObjectIdentifier) {
-        clientsLock.lock()
-        if let client = clients.removeValue(forKey: clientId) {
-            client.close()
-            print("[BrowserRelay] Client disconnected, remaining: \(clients.count)")
-        }
-        clientsLock.unlock()
     }
     
     // MARK: - Broadcasting
@@ -424,12 +158,12 @@ public class BrowserRelayServer {
         
         guard let json = config.toJSON() else { return }
         
-        clientsLock.lock()
-        let activeClients = clients.values.filter { $0.isWebSocketUpgraded }
-        clientsLock.unlock()
+        sessionsLock.lock()
+        let sessions = webSocketSessions
+        sessionsLock.unlock()
         
-        for client in activeClients {
-            client.sendWebSocketFrame(json, isText: true)
+        for session in sessions {
+            session.writeText(json)
         }
         
         print("[BrowserRelay] Broadcast config: \(config.codec == .hevc ? "HEVC" : "H.264") \(config.width)x\(config.height)")
@@ -438,10 +172,10 @@ public class BrowserRelayServer {
     /// Broadcast a video frame to all connected clients
     /// Frame envelope: [1 byte flags][4 bytes timestamp ms][4 bytes payload length][NAL bytes...]
     public func broadcastFrame(flags: UInt8, timestamp: UInt32, payload: Data) {
-        clientsLock.lock()
-        let activeClients = clients.values.filter { $0.isWebSocketUpgraded }
-        let clientCount = activeClients.count
-        clientsLock.unlock()
+        sessionsLock.lock()
+        let sessions = webSocketSessions
+        let clientCount = sessions.count
+        sessionsLock.unlock()
         
         // Only broadcast if we have clients
         guard clientCount > 0 else { return }
@@ -465,8 +199,9 @@ public class BrowserRelayServer {
         
         envelope.append(payload)
         
-        for client in activeClients {
-            client.sendWebSocketFrame(envelope, isText: false)
+        let bytes = [UInt8](envelope)
+        for session in sessions {
+            session.writeBinary(bytes)
         }
     }
     
@@ -602,7 +337,6 @@ public class BrowserRelayServer {
             };
 
             ws.onmessage = ev => {
-                console.log('Received message:', typeof ev.data, ev.data.byteLength || ev.data.length);
                 if (typeof ev.data === 'string') {
                     try {
                         const msg = JSON.parse(ev.data);
@@ -617,13 +351,11 @@ public class BrowserRelayServer {
                 }
                 
                 if (!ready) {
-                    console.log('Not ready, dropping frame');
                     return;
                 }
                 
                 const buf = new Uint8Array(ev.data);
                 if (buf.length < 9) {
-                    console.log('Frame too short:', buf.length);
                     return;
                 }
                 
@@ -640,8 +372,6 @@ public class BrowserRelayServer {
                 const len = (buf[5]<<24)|(buf[6]<<16)|(buf[7]<<8)|buf[8];
                 const nal = buf.slice(9, 9 + len);
                 
-                console.log(`Frame: ts=${ts}, len=${len}, isKey=${isKey}, actual=${nal.length}`);
-                
                 try {
                     const chunk = new EncodedVideoChunk({
                         type: isKey ? 'key' : 'delta',
@@ -651,8 +381,6 @@ public class BrowserRelayServer {
                     
                     if (decoder && decoder.state === 'configured') {
                         decoder.decode(chunk);
-                    } else {
-                        console.log('Decoder not configured, state:', decoder?.state);
                     }
                 } catch(e) {
                     console.error('Decode error', e);
@@ -687,18 +415,6 @@ public class BrowserRelayServer {
 public class CodecDescriptionBuilder {
     
     /// Build avcC box from H.264 SPS and PPS
-    /// avcC structure:
-    /// [0] = 1 (version)
-    /// [1] = profile_idc
-    /// [2] = profile_compat (constraint flags)
-    /// [3] = level_idc
-    /// [4] = 0xFF (reserved 6 bits + NAL length size - 1 = 3 -> 4 bytes)
-    /// [5] = 0xE1 (reserved 3 bits + number of SPS = 1)
-    /// [6-7] = SPS length (big-endian)
-    /// [...] = SPS data
-    /// [next] = number of PPS (1)
-    /// [next 2] = PPS length (big-endian)
-    /// [...] = PPS data
     public static func buildAvcC(sps: Data, pps: Data) -> Data? {
         guard sps.count >= 4 else { return nil }
         
@@ -739,7 +455,6 @@ public class CodecDescriptionBuilder {
     }
     
     /// Build hvcc (HEVCDecoderConfigurationRecord) from VPS, SPS, PPS
-    /// Simplified hvcc structure for WebCodecs compatibility
     public static func buildHvcc(vps: Data, sps: Data, pps: Data) -> Data? {
         guard vps.count >= 2, sps.count >= 2, pps.count >= 2 else { return nil }
         
@@ -748,7 +463,6 @@ public class CodecDescriptionBuilder {
         // configurationVersion = 1
         hvcc.append(1)
         
-        // Parse SPS to get profile info (simplified - use defaults)
         // general_profile_space (2 bits) + general_tier_flag (1 bit) + general_profile_idc (5 bits)
         hvcc.append(0x01)  // Main profile
         
@@ -758,31 +472,30 @@ public class CodecDescriptionBuilder {
         // general_constraint_indicator_flags (48 bits)
         hvcc.append(contentsOf: [0xB0, 0x00, 0x00, 0x00, 0x00, 0x00])
         
-        // general_level_idc (typically 93 for 1080p@60, 120 for 4K@60)
+        // general_level_idc
         hvcc.append(93)
         
-        // min_spatial_segmentation_idc (16 bits, reserved 4 bits + 12 bits)
+        // min_spatial_segmentation_idc (16 bits)
         hvcc.append(0xF0)
         hvcc.append(0x00)
         
-        // parallelismType (6 reserved bits + 2 bits)
+        // parallelismType
         hvcc.append(0xFC)
         
-        // chromaFormat (6 reserved bits + 2 bits) - typically 1 for 4:2:0
+        // chromaFormat
         hvcc.append(0xFD)
         
-        // bitDepthLumaMinus8 (5 reserved bits + 3 bits)
+        // bitDepthLumaMinus8
         hvcc.append(0xF8)
         
-        // bitDepthChromaMinus8 (5 reserved bits + 3 bits)
+        // bitDepthChromaMinus8
         hvcc.append(0xF8)
         
-        // avgFrameRate (16 bits) - 0 means unspecified
+        // avgFrameRate
         hvcc.append(0x00)
         hvcc.append(0x00)
         
-        // constantFrameRate (2 bits) + numTemporalLayers (3 bits) + temporalIdNested (1 bit) + lengthSizeMinusOne (2 bits)
-        // = 0 + 1 + 1 + 3 = 0x0F
+        // constantFrameRate + numTemporalLayers + temporalIdNested + lengthSizeMinusOne
         hvcc.append(0x0F)
         
         // numOfArrays

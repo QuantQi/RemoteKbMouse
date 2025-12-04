@@ -12,7 +12,9 @@ let package = Package(
         .executable(name: "Server", targets: ["Server"]),
         .executable(name: "Client", targets: ["Client"]),
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/httpswift/swifter.git", from: "1.5.0")
+    ],
     targets: [
         .target(
             name: "SharedCode",
@@ -22,7 +24,10 @@ let package = Package(
             dependencies: ["SharedCode"]),
         .executableTarget(
             name: "Client",
-            dependencies: ["SharedCode"],
+            dependencies: [
+                "SharedCode",
+                .product(name: "Swifter", package: "swifter")
+            ],
             exclude: ["Info.plist"], // Exclude Info.plist from sources
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
