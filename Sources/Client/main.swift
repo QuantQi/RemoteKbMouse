@@ -243,12 +243,17 @@ class KVMController: ObservableObject {
     
     /// Handle parameter sets becoming available - build codec description and send to browser
     private func handleParameterSetsAvailable(codec: VideoCodec, vps: Data?, sps: Data, pps: Data) {
+        print("[RELAY] Parameter sets available: codec=\(codec == .hevc ? "HEVC" : "H.264"), vps=\(vps?.count ?? 0), sps=\(sps.count), pps=\(pps.count)")
+        
         // Build avcC or hvcc description
         let description: Data?
         let codecType: BrowserRelayServer.VideoCodecType
         
         if codec == .hevc {
-            guard let vpsData = vps else { return }
+            guard let vpsData = vps else { 
+                print("[RELAY] ERROR: HEVC but no VPS")
+                return 
+            }
             description = CodecDescriptionBuilder.buildHvcc(vps: vpsData, sps: sps, pps: pps)
             codecType = .hevc
         } else {
@@ -257,9 +262,11 @@ class KVMController: ObservableObject {
         }
         
         guard let avcDescription = description else {
-            print("[Client] Failed to build codec description")
+            print("[RELAY] Failed to build codec description")
             return
         }
+        
+        print("[RELAY] Built codec description: \(avcDescription.count) bytes")
         
         let config = BrowserRelayServer.CodecConfig(
             codec: codecType,
@@ -275,6 +282,7 @@ class KVMController: ObservableObject {
            cachedCodecConfig?.height != config.height ||
            cachedCodecConfig?.avcDescription != config.avcDescription {
             cachedCodecConfig = config
+            print("[RELAY] Broadcasting config: \(config.width)x\(config.height) \(codecType == .hevc ? "HEVC" : "H.264")")
             browserRelay.broadcastConfig(config)
         }
     }
@@ -304,33 +312,8 @@ class KVMController: ObservableObject {
     
     private func handleDecodedFrame(_ pixelBuffer: CVPixelBuffer) {
         displayedFrameCount += 1
-        // let width = CVPixelBufferGetWidth(pixelBuffer)
-        // let height = CVPixelBufferGetHeight(pixelBuffer)
-        
-        // print("[DISPLAY] handleDecodedFrame #\(displayedFrameCount): \(width)x\(height)")
-        
-        // Get IOSurface for zero-copy GPU display (decoder is configured to output IOSurface-backed buffers)
-        guard let surfaceRef = CVPixelBufferGetIOSurface(pixelBuffer) else {
-            // print("[DISPLAY] ERROR: CVPixelBufferGetIOSurface returned nil!")
-            return
-        }
-        let surface = surfaceRef.takeUnretainedValue()
-        // print("[DISPLAY] Got IOSurface: \(surface)")
-        
-        // Display directly on GPU - no CPU copy!
-        // CALayer.contents accepts IOSurface and composites it directly on GPU
-        DispatchQueue.main.async {
-            // print("[DISPLAY] Main thread: setting videoLayer.contents...")
-            // print("[DISPLAY] videoLayer frame: \(self.videoLayer.frame), bounds: \(self.videoLayer.bounds)")
-            // print("[DISPLAY] videoLayer superlayer: \(String(describing: self.videoLayer.superlayer))")
-            
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)  // No animation
-            self.videoLayer.contents = surface
-            CATransaction.commit()
-            
-            // print("[DISPLAY] Frame #\(self.displayedFrameCount) displayed: \(width)x\(height)")
-        }
+        // Video display is now handled by browser - do nothing here
+        // We still decode to detect codec and extract parameter sets
     }
     
     deinit {
@@ -500,8 +483,10 @@ class KVMController: ObservableObject {
                 self?.clipboardSync.startPolling()
                 // Start browser relay
                 self?.browserRelay.start()
+                let relayURL = self?.browserRelay.url ?? ""
+                print("[Client] Browser relay URL: \(relayURL)")
                 DispatchQueue.main.async {
-                    self?.browserRelayURL = self?.browserRelay.url ?? ""
+                    self?.browserRelayURL = relayURL
                 }
                 // Note: We'll send desired display mode after receiving server capabilities
             case .failed, .cancelled:
@@ -701,15 +686,18 @@ class KVMController: ObservableObject {
         if detectedCodec == .hevc {
             flags |= 0x02
         }
+        
+        // Debug: log frame broadcast
+        if videoFrameCount <= 5 || videoFrameCount % 60 == 0 || isKeyframe {
+            print("[RELAY] Frame #\(videoFrameCount): \(frameData.count) bytes, keyframe=\(isKeyframe), codec=\(detectedCodec == .hevc ? "HEVC" : "H.264")")
+        }
+        
         browserRelay.broadcastFrame(flags: flags, timestamp: timestamp, payload: frameData)
         
         // Decode the frame (still needed to detect codec and extract parameter sets)
+        // But don't display - video goes to browser now
         if videoSourceMode == .networkStream {
-            // print("[FRAME] Sending \(frameData.count) bytes to decoder...")
             decoder?.decode(nalData: frameData)
-            // print("[FRAME] Decoder returned")
-        } else {
-            // print("[FRAME] WARNING: Not in networkStream mode!")
         }
         
         // Reset for next frame

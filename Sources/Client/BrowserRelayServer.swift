@@ -256,16 +256,21 @@ public class BrowserRelayServer {
         let method = parts[0]
         let path = parts[1]
         
+        print("[BrowserRelay] HTTP request: \(method) \(path)")
+        
         // Check for WebSocket upgrade
         let isUpgrade = requestString.lowercased().contains("upgrade: websocket")
         let wsKeyLine = lines.first { $0.lowercased().hasPrefix("sec-websocket-key:") }
         
         if method == "GET" && path == "/ws" && isUpgrade, let keyLine = wsKeyLine {
+            print("[BrowserRelay] WebSocket upgrade request")
             let key = keyLine.components(separatedBy: ":").dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
             handleWebSocketUpgrade(client: client, clientId: clientId, key: key)
-        } else if method == "GET" && path == "/" {
+        } else if method == "GET" && (path == "/" || path.isEmpty) {
+            print("[BrowserRelay] Serving HTML page")
             sendHTMLPage(client: client, clientId: clientId)
         } else {
+            print("[BrowserRelay] 404 for path: \(path)")
             send404(client: client)
         }
         
@@ -386,6 +391,14 @@ public class BrowserRelayServer {
     /// Broadcast a video frame to all connected clients
     /// Frame envelope: [1 byte flags][4 bytes timestamp ms][4 bytes payload length][NAL bytes...]
     public func broadcastFrame(flags: UInt8, timestamp: UInt32, payload: Data) {
+        clientsLock.lock()
+        let activeClients = clients.values.filter { $0.isWebSocketUpgraded }
+        let clientCount = activeClients.count
+        clientsLock.unlock()
+        
+        // Only broadcast if we have clients
+        guard clientCount > 0 else { return }
+        
         // Build binary envelope
         var envelope = Data(capacity: 9 + payload.count)
         envelope.append(flags)
@@ -404,10 +417,6 @@ public class BrowserRelayServer {
         envelope.append(UInt8(len & 0xFF))
         
         envelope.append(payload)
-        
-        clientsLock.lock()
-        let activeClients = clients.values.filter { $0.isWebSocketUpgraded }
-        clientsLock.unlock()
         
         for client in activeClients {
             client.sendWebSocketFrame(envelope, isText: false)
@@ -536,17 +545,21 @@ public class BrowserRelayServer {
 
         function connect() {
             updateStatus('Connecting...');
+            console.log('Connecting to WebSocket...');
             const ws = new WebSocket(`ws://${location.host}/ws`);
             ws.binaryType = 'arraybuffer';
 
             ws.onopen = () => {
+                console.log('WebSocket connected');
                 updateStatus('Connected, waiting for config...', 'connected');
             };
 
             ws.onmessage = ev => {
+                console.log('Received message:', typeof ev.data, ev.data.byteLength || ev.data.length);
                 if (typeof ev.data === 'string') {
                     try {
                         const msg = JSON.parse(ev.data);
+                        console.log('Received config:', msg);
                         if (msg.type === 'config') {
                             ensureDecoder(msg);
                         }
@@ -556,10 +569,16 @@ public class BrowserRelayServer {
                     return;
                 }
                 
-                if (!ready) return;
+                if (!ready) {
+                    console.log('Not ready, dropping frame');
+                    return;
+                }
                 
                 const buf = new Uint8Array(ev.data);
-                if (buf.length < 9) return;
+                if (buf.length < 9) {
+                    console.log('Frame too short:', buf.length);
+                    return;
+                }
                 
                 const flags = buf[0];
                 const isKey = (flags & 0x01) !== 0;
@@ -574,6 +593,8 @@ public class BrowserRelayServer {
                 const len = (buf[5]<<24)|(buf[6]<<16)|(buf[7]<<8)|buf[8];
                 const nal = buf.slice(9, 9 + len);
                 
+                console.log(`Frame: ts=${ts}, len=${len}, isKey=${isKey}, actual=${nal.length}`);
+                
                 try {
                     const chunk = new EncodedVideoChunk({
                         type: isKey ? 'key' : 'delta',
@@ -583,6 +604,8 @@ public class BrowserRelayServer {
                     
                     if (decoder && decoder.state === 'configured') {
                         decoder.decode(chunk);
+                    } else {
+                        console.log('Decoder not configured, state:', decoder?.state);
                     }
                 } catch(e) {
                     console.error('Decode error', e);
@@ -595,6 +618,7 @@ public class BrowserRelayServer {
             };
 
             ws.onclose = () => {
+                console.log('WebSocket closed');
                 ready = false;
                 try { decoder?.close(); } catch(e) {}
                 updateStatus('Disconnected, reconnecting...', 'error');
