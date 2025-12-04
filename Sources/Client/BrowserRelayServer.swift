@@ -171,6 +171,7 @@ public class BrowserRelayServer {
     
     /// Broadcast a video frame to all connected clients
     /// Frame envelope: [1 byte flags][4 bytes timestamp ms][4 bytes payload length][NAL bytes...]
+    /// Input is Annex-B format, output is AVCC format (length-prefixed)
     public func broadcastFrame(flags: UInt8, timestamp: UInt32, payload: Data) {
         sessionsLock.lock()
         let sessions = webSocketSessions
@@ -180,8 +181,11 @@ public class BrowserRelayServer {
         // Only broadcast if we have clients
         guard clientCount > 0 else { return }
         
+        // Convert Annex-B to AVCC format
+        let avccPayload = convertAnnexBToAVCC(payload)
+        
         // Build binary envelope
-        var envelope = Data(capacity: 9 + payload.count)
+        var envelope = Data(capacity: 9 + avccPayload.count)
         envelope.append(flags)
         
         // Timestamp (big-endian)
@@ -191,18 +195,78 @@ public class BrowserRelayServer {
         envelope.append(UInt8(timestamp & 0xFF))
         
         // Payload length (big-endian)
-        let len = UInt32(payload.count)
+        let len = UInt32(avccPayload.count)
         envelope.append(UInt8((len >> 24) & 0xFF))
         envelope.append(UInt8((len >> 16) & 0xFF))
         envelope.append(UInt8((len >> 8) & 0xFF))
         envelope.append(UInt8(len & 0xFF))
         
-        envelope.append(payload)
+        envelope.append(avccPayload)
         
         let bytes = [UInt8](envelope)
         for session in sessions {
             session.writeBinary(bytes)
         }
+    }
+    
+    /// Convert Annex-B format (start code delimited) to AVCC format (length prefixed)
+    /// Annex-B uses 00 00 00 01 or 00 00 01 as NAL delimiters
+    /// AVCC uses 4-byte big-endian length prefix for each NAL
+    private func convertAnnexBToAVCC(_ annexB: Data) -> Data {
+        var result = Data()
+        var i = 0
+        let bytes = [UInt8](annexB)
+        let count = bytes.count
+        
+        while i < count {
+            // Find start code (00 00 00 01 or 00 00 01)
+            var startCodeLen = 0
+            if i + 3 < count && bytes[i] == 0 && bytes[i+1] == 0 && bytes[i+2] == 0 && bytes[i+3] == 1 {
+                startCodeLen = 4
+            } else if i + 2 < count && bytes[i] == 0 && bytes[i+1] == 0 && bytes[i+2] == 1 {
+                startCodeLen = 3
+            } else {
+                // No start code at current position, skip byte
+                i += 1
+                continue
+            }
+            
+            // Move past start code
+            let nalStart = i + startCodeLen
+            i = nalStart
+            
+            // Find next start code or end of data
+            var nalEnd = count
+            while i < count - 2 {
+                if bytes[i] == 0 && bytes[i+1] == 0 {
+                    if i + 2 < count && bytes[i+2] == 1 {
+                        nalEnd = i
+                        break
+                    } else if i + 3 < count && bytes[i+2] == 0 && bytes[i+3] == 1 {
+                        nalEnd = i
+                        break
+                    }
+                }
+                i += 1
+            }
+            
+            // Extract NAL unit
+            let nalLength = nalEnd - nalStart
+            if nalLength > 0 {
+                // Write 4-byte length prefix (big-endian)
+                result.append(UInt8((nalLength >> 24) & 0xFF))
+                result.append(UInt8((nalLength >> 16) & 0xFF))
+                result.append(UInt8((nalLength >> 8) & 0xFF))
+                result.append(UInt8(nalLength & 0xFF))
+                
+                // Write NAL data
+                result.append(contentsOf: bytes[nalStart..<nalEnd])
+            }
+            
+            i = nalEnd
+        }
+        
+        return result
     }
     
     // MARK: - HTML Page Generation
